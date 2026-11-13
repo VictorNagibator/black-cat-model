@@ -17,15 +17,15 @@ function furMaterial({ color, sheen, h = 0, den = 70, len = 0.03 }) {
   m.userData.u = u;
   m.onBeforeCompile = (s) => {
     Object.assign(s.uniforms, m.userData.u);
-    s.vertexShader = 'attribute vec3 furP; attribute vec3 furDir; attribute float furK;\nuniform float uFurOff; uniform float uFurH;\nvarying vec3 vFurP;\n' + s.vertexShader.replace(
+    s.vertexShader = 'attribute vec3 furP; attribute vec3 furDir; attribute float furK;\nuniform float uFurOff; uniform float uFurH;\nvarying vec3 vFurP; varying float vFurK;\n' + s.vertexShader.replace(
       '#include <begin_vertex>',
       `#include <begin_vertex>
-       vFurP = furP;
+       vFurP = furP; vFurK = furK;
        // ворсинки «причёсаны» вдоль furDir и сильнее гнутся к кончику
        vec3 comb = furDir - normal * dot(furDir, normal);
        transformed += (normal + comb * uFurH * 1.4) * uFurOff * furK;`
     );
-    s.fragmentShader = `uniform float uFurH; uniform float uFurDen; varying vec3 vFurP;
+    s.fragmentShader = `uniform float uFurH; uniform float uFurDen; varying vec3 vFurP; varying float vFurK;
 float furHash(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
 ` + s.fragmentShader.replace(
       '#include <color_fragment>',
@@ -38,7 +38,7 @@ float furHash(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*
         vec3 f = fract(q) - 0.5 - jit * 0.4;
         if (uFurH > 0.0) {
           float rad = 0.62 * pow(1.0 - uFurH, 0.6);
-          if (uFurH > 0.35 + 0.65 * hh || length(f) > rad) discard;
+          if (uFurH > 0.35 + 0.65 * hh || length(f) > rad || uFurH > vFurK * 1.15) discard;
         }
         diffuseColor.rgb *= mix(0.5, 1.15, uFurH) * (0.85 + 0.3 * hh);
       }`
@@ -183,6 +183,12 @@ export class Cat {
     this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.35 });
     this.matWhiskerDark = new THREE.MeshStandardMaterial({ color: 0x55504c, roughness: 0.4 });
     this.eyeMats = [];
+    this.matLid = new THREE.MeshPhysicalMaterial({ color: 0x080606, roughness: 0.75, sheen: 1, sheenColor: new THREE.Color(0x3a312c), sheenRoughness: 0.5 });
+    this.matLidRim = new THREE.MeshStandardMaterial({ color: 0x030202, roughness: 0.45 });
+    this.matPalate = new THREE.MeshStandardMaterial({ color: 0xc06474, roughness: 0.5, emissive: 0x3a1018 });
+    this.matGum = new THREE.MeshStandardMaterial({ color: 0x6e2e3a, roughness: 0.5 });
+    this.matThroat = new THREE.MeshBasicMaterial({ color: 0x1c0709 });
+    this.matLip = new THREE.MeshStandardMaterial({ color: 0x0a0707, roughness: 0.4 });
     this.build();
   }
 
@@ -200,7 +206,14 @@ export class Cat {
       for (let i = 0; i < n; i++) a.set([d.x, d.y, d.z], i * 3);
       geo.setAttribute('furDir', new THREE.BufferAttribute(a, 3));
     }
-    if (!geo.attributes.furK) geo.setAttribute('furK', new THREE.BufferAttribute(new Float32Array(n).fill(opts.k ?? 1), 1));
+    if (!geo.attributes.furK) {
+      const k = new Float32Array(n).fill(opts.k ?? 1);
+      if (opts.kFn) {
+        const pa = geo.attributes.position, v = new THREE.Vector3();
+        for (let i = 0; i < n; i++) k[i] = opts.kFn(v.fromBufferAttribute(pa, i).add(m.position), k[i]);
+      }
+      geo.setAttribute('furK', new THREE.BufferAttribute(k, 1));
+    }
     parent.add(m);
     this.parts.push(m);
     if (set.shells && opts.fur !== false) {
@@ -247,15 +260,32 @@ export class Cat {
     // голова
     this.head = G(); this.head.position.set(0, 0.34, 0.38); this.neck.add(this.head);
     const H = this.head;
-    this.addPart(H, ellipsoid(0.66, 0.55, 0.56, 36), [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9 });
+    // вокруг глаз и носа шёрстка короткая и гладкая
+    const EYE = [new THREE.Vector3(0.26, 0.085, 0.395), new THREE.Vector3(-0.26, 0.085, 0.395)];
+    const NOSE = new THREE.Vector3(0, -0.11, 0.545);
+    const faceK = (v, k) => {
+      const de = Math.min(v.distanceTo(EYE[0]), v.distanceTo(EYE[1]));
+      const dn = v.distanceTo(NOSE);
+      return k * (0.04 + 0.96 * THREE.MathUtils.smoothstep(de, 0.14, 0.3)) * (0.2 + 0.8 * THREE.MathUtils.smoothstep(dn, 0.05, 0.16));
+    };
+    // череп; спереди-снизу «выемка» под ротовую полость (её прикрывают подбородок и подушечки)
+    const skull = ellipsoid(0.66, 0.55, 0.56, 40);
+    { const pa = skull.attributes.position;
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+        const w = (1 - THREE.MathUtils.smoothstep(Math.abs(x), 0.06, 0.13)) * THREE.MathUtils.smoothstep(-y, 0.17, 0.24) * THREE.MathUtils.smoothstep(z, 0.2, 0.32);
+        pa.setZ(i, z - 0.16 * w);
+      }
+      skull.computeVertexNormals(); }
+    this.addPart(H, skull, [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9, kFn: faceK });
     // щёки (у вислоухих круглое широкое лицо)
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.9 });
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.9 });
+    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.9, kFn: faceK });
+    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.9, kFn: faceK });
     // широкая переносица от глаз к носу
-    this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur, { dir: [0, 1, -0.3], k: 0.5 });
+    this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur, { dir: [0, 1, -0.3], k: 0.45, kFn: faceK });
     // подушечки усов
-    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [1, -0.3, 0], k: 0.6 });
-    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [-0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [-1, -0.3, 0], k: 0.6 });
+    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [1, -0.3, 0], k: 0.4, kFn: faceK });
+    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [-0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [-1, -0.3, 0], k: 0.4, kFn: faceK });
     // нос — тёмно-серый треугольник
     const ng = ellipsoid(0.07, 0.042, 0.03, 20);
     { const p = ng.attributes.position;
@@ -299,9 +329,14 @@ export class Cat {
       look.add(eye);
       const lidGeoU = new THREE.SphereGeometry(0.155, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2);
       const lidGeoL = new THREE.SphereGeometry(0.152, 28, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
-      const up = new THREE.Mesh(lidGeoU, this.fur.base); up.castShadow = false;
-      const lo = new THREE.Mesh(lidGeoL, this.fur.base);
+      const up = new THREE.Mesh(lidGeoU, this.matLid); up.castShadow = false;
+      const lo = new THREE.Mesh(lidGeoL, this.matLid);
       eg.add(up); eg.add(lo);
+      // край века — тёмная «подводка» по кромке каждого века, двигается вместе с ним
+      for (const [lid, r] of [[up, 0.155], [lo, 0.152]]) {
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(r - 0.002, 0.0075, 6, 32, Math.PI), this.matLidRim);
+        rim.rotation.x = Math.PI / 2; rim.rotation.z = Math.PI; lid.add(rim);
+      }
       this.eyes.push(look); this.lids.push({ up, lo });
     }
 
