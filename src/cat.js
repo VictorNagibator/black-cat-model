@@ -258,7 +258,7 @@ export class Cat {
     this.neck.add(this.collar);
 
     // голова
-    this.head = G(); this.head.position.set(0, 0.34, 0.38); this.neck.add(this.head);
+    this.head = G(); this.head.position.set(0, 0.44, 0.47); this.neck.add(this.head);
     const H = this.head;
     // вокруг глаз и носа шёрстка короткая и гладкая
     const EYE = [new THREE.Vector3(0.26, 0.085, 0.395), new THREE.Vector3(-0.26, 0.085, 0.395)];
@@ -607,13 +607,13 @@ export class Cat {
     P[2].set(0, 0.09, 0.42);
     P[3].set(0, 0.05, 0.4).applyMatrix4(ch.matrix);
     P[4].set(0, 0.1, 0.85).applyMatrix4(ch.matrix);
-    P[5].set(0, 0.0, 0.12).applyMatrix4(mN);
+    P[5].set(0, 0.06, 0.22).applyMatrix4(mN);
     P[6].set(0, -0.16, -0.1).applyMatrix4(mH);
     V.up.set(0, 1, 0).applyQuaternion(pel.quaternion);
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
     // профиль: s, полуширина, полувысота, смещение вниз
-    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.33, 0.45, 0.53, -0.03], [0.5, 0.46, 0.56, 0], [0.66, 0.41, 0.49, 0], [0.83, 0.31, 0.35, 0], [1, 0.27, 0.3, 0]];
+    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.33, 0.45, 0.53, -0.03], [0.5, 0.46, 0.56, 0], [0.66, 0.41, 0.49, 0], [0.82, 0.29, 0.32, 0], [1, 0.27, 0.29, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
         const t = (s - PR[i - 1][0]) / (PR[i][0] - PR[i - 1][0]);
