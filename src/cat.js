@@ -392,14 +392,70 @@ export class Cat {
       const g = G();
       g.position.set(0, i === 0 ? 0.3 : 0, i === 0 ? -0.62 : -segL);
       parent.add(g);
-      const r0 = THREE.MathUtils.lerp(0.13, 0.065, i / N);
-      const r1 = THREE.MathUtils.lerp(0.13, 0.065, (i + 1) / N);
-      const geo = capsuleDown(r0, segL, r1);
-      geo.rotateX(Math.PI / 2); // вдоль -z
-      this.addPart(g, geo, [0, 0, 0], 'tail', this.fur, { dir: [0, 0, -1], k: 1.3 });
       this.tail.push(g);
       parent = g;
     }
+    this.tailSegL = segL;
+    this.buildTail();
+  }
+
+  // ---------- хвост: одна гладкая трубка по суставам ----------
+  buildTail() {
+    const NR = 48, NA = 14;
+    this.tailN = [NR, NA];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array((NR + 1) * (NA + 1) * 3), 3));
+    const idx = [];
+    for (let i = 0; i < NR; i++) for (let j = 0; j < NA; j++) {
+      const a = i * (NA + 1) + j, b = a + NA + 1;
+      idx.push(a, a + 1, b, a + 1, b + 1, b);
+    }
+    g.setIndex(idx);
+    this.tailGeo = g;
+    this._tm = new THREE.Matrix4();
+    this._tailCurve = new THREE.CatmullRomCurve3(Array.from({ length: this.tail.length + 1 }, () => new THREE.Vector3()), false, 'centripetal');
+    for (const t of this.tail) t.updateMatrix();
+    this.updateTail();
+    g.setAttribute('furP', g.attributes.position.clone());
+    // ворс вдоль хвоста, к кончику пушистее
+    const n = g.attributes.position.count, d = new Float32Array(n * 3), k = new Float32Array(n);
+    const tg = new THREE.Vector3();
+    for (let i = 0; i <= NR; i++) {
+      this._tailCurve.getTangentAt(i / NR, tg);
+      for (let j = 0; j <= NA; j++) { const id = i * (NA + 1) + j; d.set([tg.x, tg.y, tg.z], id * 3); k[id] = 1.2 + 0.4 * (i / NR); }
+    }
+    g.setAttribute('furDir', new THREE.BufferAttribute(d, 3));
+    g.setAttribute('furK', new THREE.BufferAttribute(k, 1));
+    this.tailMesh = this.addPart(this.pelvis, g, [0, 0, 0], 'tail');
+  }
+
+  updateTail() {
+    const [NR, NA] = this.tailN;
+    const pts = this._tailCurve.points, m = this._tm.identity();
+    for (let i = 0; i < this.tail.length; i++) {
+      m.multiply(this.tail[i].matrix);
+      pts[i].setFromMatrixPosition(m);
+    }
+    pts[this.tail.length].set(0, 0, -this.tailSegL).applyMatrix4(m);
+    const frames = this._tailCurve.computeFrenetFrames(NR, false);
+    const pos = this.tailGeo.attributes.position.array, c = new THREE.Vector3();
+    let o = 0;
+    for (let i = 0; i <= NR; i++) {
+      const s = i / NR;
+      this._tailCurve.getPointAt(s, c);
+      let r = THREE.MathUtils.lerp(0.13, 0.062, Math.pow(s, 0.9));
+      if (s > 0.94) r *= Math.sqrt(Math.max(0, 1 - ((s - 0.94) / 0.06) ** 2)) * 0.9 + 0.1 * (1 - (s - 0.94) / 0.06);
+      const N = frames.normals[i], B = frames.binormals[i];
+      for (let j = 0; j <= NA; j++) {
+        const a = (j / NA) * Math.PI * 2, ca = Math.cos(a) * r, sa = Math.sin(a) * r;
+        pos[o++] = c.x + N.x * ca + B.x * sa;
+        pos[o++] = c.y + N.y * ca + B.y * sa;
+        pos[o++] = c.z + N.z * ca + B.z * sa;
+      }
+    }
+    this.tailGeo.attributes.position.needsUpdate = true;
+    this.tailGeo.computeVertexNormals();
+    this.tailGeo.computeBoundingSphere();
   }
 
   // ---------- туловище-лофт ----------
@@ -563,6 +619,8 @@ export class Cat {
       const wave = Math.sin(t * 1.6 * P.tailWaveSpeed - i * 0.45) * P.tailWave * (0.3 + k);
       if (i === 0) g.rotation.set(P.tailPitch, P.tailYaw + wave * 0.5, 0, 'YXZ');
       else g.rotation.set(P.tailBendX, P.tailBendY + wave * 0.35, 0, 'YXZ');
+      g.updateMatrix();
     }
+    this.updateTail();
   }
 }
