@@ -1,36 +1,44 @@
-# Чёрная кошка в 3D
+# Black cat 🐈‍⬛
 
-Процедурная 3D-модель моей чёрной шотландской вислоухой кошки в браузере (Three.js, без сборки и без внешних моделей — всё построено кодом).
+An interactive 3D model of my black Scottish Fold cat, Chernushka, that runs in the browser.
+Everything is built procedurally with [Three.js](https://threejs.org/): no external models, no build step.
 
-## Запуск
+**Live demo:** https://&lt;your-login&gt;.github.io/black-cat-model/
 
-Нужен Node.js:
+![Chernushka](docs/preview.jpg)
+
+## Features
+
+- **Poses:** stand, sit, loaf, sphinx, lie on side, sleep curled up, belly up.
+- **Actions:** sniff a sock (with a flehmen face), yawn, meow, blep, wash, stretch.
+- **Interactions:** pet her (hold and drag on the head or back, she purrs), boop the nose, rub the belly when she lies belly up, don't touch the tail.
+- **Games:** laser pointer (she stalks and pounces) and a toy mouse.
+- Follows the cursor with her eyes, blinks, breathes and lives her own life when idle.
+- English / Russian UI.
+
+## Run locally
+
+Requires [Node.js](https://nodejs.org/) (no dependencies to install):
 
 ```bash
-node serve.js
+npm start
 ```
 
-и открыть http://localhost:5188 (на Windows можно просто запустить `start.bat`).
+Then open http://localhost:5188. Any other static file server works too.
 
-## Онлайн (GitHub Pages)
+## Publish on GitHub Pages
 
-Проект — чистая статика без сборки, поэтому его можно открыть прямо с GitHub:
+The repository is plain static files, so it can be served directly:
+**Settings → Pages → Deploy from a branch → `main` / `(root)`**.
+The site will appear at `https://<your-login>.github.io/black-cat-model/`.
 
-1. Залить репозиторий на GitHub.
-2. **Settings → Pages → Build and deployment → Source: Deploy from a branch**, ветка `main`, папка `/ (root)` → **Save**.
-3. Через минуту-две кошка будет доступна по адресу `https://<логин>.github.io/<имя-репозитория>/`.
+## Project structure
 
-## Что умеет
-
-- **Позы:** стоять, сидеть, буханочка, сфинкс, лечь на бок, спать клубочком, пузиком кверху.
-- **Действия:** понюхать носок (с флеменом), зевнуть, мяукнуть, блеп, умыться, потянуться.
-- **Взаимодействия:** погладить (зажать и водить по голове/спинке — мурчит), буп в нос, не трогать хвост, почесать пузико в позе «кверху пузом».
-- **Игры:** лазерная указка (охотится и прыгает), игрушечная мышка.
-- Следит взглядом за курсором, моргает, дышит, «живёт своей жизнью».
-
-## Структура
-
-- `src/cat.js` — модель (голова, глаза, тело-лофт, лапы, хвост, шейдер меха)
-- `src/poses.js` — библиотека поз
-- `src/main.js` — сцена, поведение, ввод, UI
-- `src/audio.js` — синтезированные звуки (мяу, мурчание)
+| File | Contents |
+| --- | --- |
+| `src/cat.js` | the model: shell fur, body/neck loft, head, eyes, mouth, legs, tail |
+| `src/poses.js` | pose library |
+| `src/main.js` | scene, behaviour, input, UI |
+| `src/i18n.js` | UI strings (English / Russian) |
+| `src/audio.js` | synthesized meow, purr, boop and hiss |
+| `serve.js` | tiny zero-dependency dev server |
