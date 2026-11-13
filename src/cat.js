@@ -1,7 +1,7 @@
-// Процедурная 3D-модель чёрной шотландской вислоухой кошки
+// Procedural 3D model of a black Scottish Fold cat
 import * as THREE from 'three';
 
-// ---------- Мех (shell fur) ----------
+// ---------- Shell fur ----------
 const FUR_SHELLS = 8;
 
 function furMaterial({ color, sheen, h = 0, den = 70, len = 0.03 }) {
@@ -21,7 +21,7 @@ function furMaterial({ color, sheen, h = 0, den = 70, len = 0.03 }) {
       '#include <begin_vertex>',
       `#include <begin_vertex>
        vFurP = furP; vFurK = furK;
-       // ворсинки «причёсаны» вдоль furDir и сильнее гнутся к кончику
+       // strands are combed along furDir and bend more towards the tip
        vec3 comb = furDir - normal * dot(furDir, normal);
        transformed += (normal + comb * uFurH * 1.4) * uFurOff * furK;`
     );
@@ -55,7 +55,7 @@ function furSet(color, sheen, den, len) {
   return { base, shells };
 }
 
-// ---------- Глаза ----------
+// ---------- Eyes ----------
 function eyeMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -85,15 +85,15 @@ function eyeMaterial() {
         } else {
           float ang = atan(xy.y, xy.x);
           float streak = 0.5 + 0.5*sin(ang*37.0 + sin(ang*11.0)*2.0) * 0.5 + 0.5*sin(ang*71.0)*0.3;
-          vec3 inner = vec3(0.56,0.64,0.16);   // зеленоватый у зрачка
-          vec3 mid   = vec3(0.90,0.82,0.26);   // лимонно-жёлтый
-          vec3 outer = vec3(0.70,0.62,0.16);   // темнее к краю
+          vec3 inner = vec3(0.56,0.64,0.16);   // greenish near the pupil
+          vec3 mid   = vec3(0.90,0.82,0.26);   // lemon yellow
+          vec3 outer = vec3(0.70,0.62,0.16);   // darker towards the edge
           col = mix(inner, mid, smoothstep(0.12,0.5,d));
           col = mix(col, outer, smoothstep(0.72,0.95,d));
           col *= 0.85 + 0.25*streak;
-          col *= 1.0 - 0.8*smoothstep(0.93,1.0,d);   // тёмный ободок
-          col *= mix(0.5, 1.0, smoothstep(0.85, 0.25, xy.y / R)); // тень от века сверху
-          // зрачок
+          col *= 1.0 - 0.8*smoothstep(0.93,1.0,d);   // dark limbal ring
+          col *= mix(0.5, 1.0, smoothstep(0.85, 0.25, xy.y / R)); // shadow from the upper lid
+          // pupil
           vec2 pp = xy / vec2(uPupil*R*0.75, R*0.9);
           float pd = length(pp);
           col = mix(vec3(0.005), col, smoothstep(0.92,1.06,pd));
@@ -111,7 +111,7 @@ function eyeMaterial() {
   });
 }
 
-// ---------- Позы: параметры ----------
+// ---------- Pose parameters ----------
 export const BASE = {
   rootY: 0,
   torsoY: 1.6, torsoZ: 0, pitch: 0, roll: 0,
@@ -133,7 +133,7 @@ function ellipsoid(rx, ry, rz, seg = 28) {
   return g;
 }
 function capsuleDown(r, len, r2) {
-  // капсула, идущая от 0 вниз до -len; r2 — радиус на конце (сужение)
+  // capsule going from 0 down to -len; r2 is the radius at the end (taper)
   const g = new THREE.CapsuleGeometry(r, len, 8, 16);
   g.translate(0, -len / 2, 0);
   if (r2 !== undefined) {
@@ -149,7 +149,7 @@ function capsuleDown(r, len, r2) {
   return g;
 }
 
-// трубка, сужающаяся к концу (усы)
+// tube tapering towards its end (whiskers)
 function taperTube(curve, segs, r, tip = 0.15, radial = 5) {
   const g = new THREE.TubeGeometry(curve, segs, r, radial, false);
   const p = g.attributes.position, c = new THREE.Vector3(), v = new THREE.Vector3();
@@ -170,7 +170,7 @@ function taperTube(curve, segs, r, tip = 0.15, radial = 5) {
 export class Cat {
   constructor() {
     this.root = new THREE.Group();
-    this.parts = []; // меши для рейкаста
+    this.parts = []; // meshes used for raycasting
     this.shellMeshes = [];
     this.fur = furSet(0x060505, 0x3a312c, 130, 0.034);
     this.furMuzzle = furSet(0x151312, 0x6f6a64, 150, 0.022);
@@ -233,19 +233,17 @@ export class Cat {
     const root = this.root;
 
     this.torso = G(); root.add(this.torso);
-    // таз
+    // pelvis
     this.pelvis = G(); this.torso.add(this.pelvis);
-    // грудь (группа нужна до построения туловища)
+    // chest (the group must exist before the body loft is built)
     this.chest = G(); this.chest.position.set(0, 0.05, 0.8); this.torso.add(this.chest);
-    // маленькое светлое пятнышко на животе (как на фото)
+    // small light spot on the belly (as in the photos)
     const spot = new THREE.Mesh(ellipsoid(0.07, 0.03, 0.09, 12), new THREE.MeshStandardMaterial({ color: 0x8a8582, roughness: 0.9 }));
     spot.position.set(0.05, -0.47, 0.55); this.torso.add(spot);
-    // грудь
 
-    // шея
-    // шея — часть общего туловища-лофта (см. updateBody), здесь только сустав
+    // neck: its surface is part of the body loft (see updateBody), this is just the joint
     this.neck = G(); this.neck.position.set(0, 0.22, 0.95); this.chest.add(this.neck);
-    // ошейник
+    // collar
     this.collar = new THREE.Group();
     const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.5 });
     this.collarMat = collarMat;
@@ -257,10 +255,10 @@ export class Cat {
     this.collar.position.set(0, 0.06, 0.12);
     this.neck.add(this.collar);
 
-    // голова
+    // head
     this.head = G(); this.head.position.set(0, 0.44, 0.47); this.neck.add(this.head);
     const H = this.head;
-    // вокруг глаз и носа шёрстка короткая и гладкая
+    // fur is short and smooth around the eyes and nose
     const EYE = [new THREE.Vector3(0.26, 0.085, 0.395), new THREE.Vector3(-0.26, 0.085, 0.395)];
     const NOSE = new THREE.Vector3(0, -0.11, 0.545);
     const faceK = (v, k) => {
@@ -268,7 +266,7 @@ export class Cat {
       const dn = v.distanceTo(NOSE);
       return k * (0.04 + 0.96 * THREE.MathUtils.smoothstep(de, 0.14, 0.3)) * (0.2 + 0.8 * THREE.MathUtils.smoothstep(dn, 0.05, 0.16));
     };
-    // череп; спереди-снизу «выемка» под ротовую полость (её прикрывают подбородок и подушечки)
+    // skull, hollowed at the front-bottom for the mouth cavity (covered by the chin and whisker pads)
     const skull = ellipsoid(0.66, 0.55, 0.56, 40);
     { const pa = skull.attributes.position;
       for (let i = 0; i < pa.count; i++) {
@@ -278,15 +276,15 @@ export class Cat {
       }
       skull.computeVertexNormals(); }
     this.addPart(H, skull, [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9, kFn: faceK });
-    // щёки (у вислоухих круглое широкое лицо)
+    // cheeks (Scottish Folds have a round, wide face)
     this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.9, kFn: faceK });
     this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.9, kFn: faceK });
-    // широкая переносица от глаз к носу
+    // wide nose bridge from the eyes down to the nose
     this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur, { dir: [0, 1, -0.3], k: 0.45, kFn: faceK });
-    // подушечки усов
+    // whisker pads
     this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [1, -0.3, 0], k: 0.4, kFn: faceK });
     this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [-0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [-1, -0.3, 0], k: 0.4, kFn: faceK });
-    // нос — тёмно-серый треугольник
+    // nose leather: a dark grey triangle
     const ng = ellipsoid(0.07, 0.042, 0.03, 20);
     { const p = ng.attributes.position;
       for (let i = 0; i < p.count; i++) { const y = p.getY(i); const k = y < 0 ? 1 + (y / 0.042) * 0.7 : 1; p.setX(i, p.getX(i) * k); }
@@ -300,13 +298,13 @@ export class Cat {
       const n = new THREE.Mesh(ellipsoid(0.013, 0.008, 0.01, 8), dark);
       n.position.set(0.026 * s, -0.122, 0.568); n.rotation.z = 0.5 * s; H.add(n);
     }
-    // желобок от носа ко рту и линия рта «перевёрнутая Y»
+    // philtrum and the inverted-Y mouth line
     const line = (pts, r) => new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((q) => new THREE.Vector3(...q))), 8, r, 5), dark);
     H.add(line([[0, -0.14, 0.558], [0, -0.18, 0.55], [0, -0.215, 0.535]], 0.005));
     for (const s of [-1, 1]) H.add(line([[0, -0.215, 0.535], [0.04 * s, -0.233, 0.52], [0.075 * s, -0.238, 0.49]], 0.004));
     this.buildMouth(H);
 
-    // глаза: круглые, широко посаженные, внешние уголки чуть вверх
+    // eyes: round, wide-set, outer corners slightly raised
     this.eyes = []; this.lids = [];
     for (const s of [1, -1]) {
       const eg = G(); eg.position.set(0.26 * s, 0.085, 0.395); eg.rotation.set(0, 0.2 * s, 0.1 * s); H.add(eg);
@@ -319,7 +317,7 @@ export class Cat {
       const up = new THREE.Mesh(lidGeoU, this.matLid); up.castShadow = false;
       const lo = new THREE.Mesh(lidGeoL, this.matLid);
       eg.add(up); eg.add(lo);
-      // край века — тёмная «подводка» по кромке каждого века, двигается вместе с ним
+      // eyelid margin: a dark rim along each lid edge that moves with the lid
       for (const [lid, r] of [[up, 0.155], [lo, 0.152]]) {
         const rim = new THREE.Mesh(new THREE.TorusGeometry(r - 0.002, 0.0075, 6, 32, Math.PI), this.matLidRim);
         rim.rotation.x = Math.PI / 2; rim.rotation.z = Math.PI; lid.add(rim);
@@ -327,7 +325,7 @@ export class Cat {
       this.eyes.push(look); this.lids.push({ up, lo });
     }
 
-    // ушки, плотно загнутые вперёд по углам головы
+    // ears folded tightly forward at the corners of the head
     this.ears = [];
     for (const s of [1, -1]) {
       const eg = G(); eg.position.set(0.36 * s, 0.37, 0.02); H.add(eg);
@@ -339,7 +337,7 @@ export class Cat {
       this.ears.push({ g: eg, fold, s });
     }
 
-    // усы
+    // whiskers
     this.whiskers = [];
     for (const s of [1, -1]) {
       const wg = G(); wg.position.set(0.12 * s, -0.2, 0.465); H.add(wg);
@@ -354,12 +352,12 @@ export class Cat {
         }
         const curve = new THREE.CatmullRomCurve3(pts);
         const tube = taperTube(curve, 14, 0.0055, 0.12);
-        // пара тёмных усов у основания, как на фото
+        // a couple of darker whiskers, as in the photos
         const w = new THREE.Mesh(tube, i === 1 || i === 6 ? this.matWhiskerDark : this.matWhisker);
         wg.add(w);
       }
       this.whiskers.push(wg);
-      // брови-усы над глазами
+      // eyebrow whiskers
       const bg = G(); bg.position.set(0.25 * s, 0.24, 0.42); H.add(bg);
       for (let i = 0; i < 2; i++) {
         const len = 0.26 + i * 0.06;
@@ -372,7 +370,7 @@ export class Cat {
       }
     }
 
-    // ---- передние лапы ----
+    // ---- front legs ----
     this.fl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const sh = G(); sh.position.set(0.28 * s, -0.22, 0.6); this.chest.add(sh);
@@ -387,20 +385,20 @@ export class Cat {
       this.addToes(paw, 0.13, 0.17);
       this.fl[side] = { sh, el, wr, paw, s };
     }
-    // ---- задние лапы ----
+    // ---- hind legs ----
     this.bl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const hp = G(); hp.position.set(0.3 * s, -0.05, -0.1); this.pelvis.add(hp);
-      // бедро — широкое, мускулистое, плавно уходит в туловище
+      // thigh: broad and muscular, blending into the body
       this.addPart(hp, ellipsoid(0.25, 0.48, 0.38), [0.02 * s, -0.2, 0.02], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.2 });
       this.addPart(hp, capsuleDown(0.19, 0.5, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0] });
       const kn = G(); kn.position.set(0, -0.62, 0); hp.add(kn);
       this.addPart(kn, capsuleDown(0.11, 0.58, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
-      // икра — сзади голени
+      // calf muscle behind the shin
       this.addPart(kn, ellipsoid(0.1, 0.24, 0.12), [0, -0.2, -0.05], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
       const hk = G(); hk.position.set(0, -0.68, 0); kn.add(hk);
       this.addPart(hk, capsuleDown(0.08, 0.36, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
-      // пяточка (скакательный сустав)
+      // heel (hock)
       this.addPart(hk, ellipsoid(0.075, 0.08, 0.09), [0, 0.0, -0.03], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
       const ft = G(); ft.position.set(0, -0.46, 0); hk.add(ft);
       this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
@@ -409,7 +407,7 @@ export class Cat {
       this.bl[side] = { hp, kn, hk, ft, s };
     }
 
-    // ---- хвост ----
+    // ---- tail ----
     this.tail = [];
     let parent = this.pelvis;
     const N = 15, segL = 0.155;
@@ -422,11 +420,11 @@ export class Cat {
     }
     this.tailSegL = segL;
     this.buildTail();
-    // туловище с шеей — одна гладкая «гибкая» оболочка вдоль позвоночника
+    // body and neck: one smooth deformable loft along the spine
     this.buildBody();
   }
 
-  // ---------- хвост: одна гладкая трубка по суставам ----------
+  // ---------- Tail: one smooth tube following the tail joints ----------
   buildTail() {
     const NR = 48, NA = 14;
     this.tailN = [NR, NA];
@@ -444,7 +442,7 @@ export class Cat {
     for (const t of this.tail) t.updateMatrix();
     this.updateTail();
     g.setAttribute('furP', g.attributes.position.clone());
-    // ворс вдоль хвоста, к кончику пушистее
+    // fur runs along the tail and gets fluffier towards the tip
     const n = g.attributes.position.count, d = new Float32Array(n * 3), k = new Float32Array(n);
     const tg = new THREE.Vector3();
     for (let i = 0; i <= NR; i++) {
@@ -485,33 +483,33 @@ export class Cat {
     this.tailGeo.computeBoundingSphere();
   }
 
-  // ---------- рот: нёбо, зубы, дёсны, язык ----------
+  // ---------- Mouth: palate, teeth, gums, tongue ----------
   buildMouth(H) {
     const G = () => new THREE.Group();
-    // ротовая полость: тёмное горло и розовые стенки
+    // oral cavity: dark throat and pink walls
     const cav = new THREE.Mesh(ellipsoid(0.075, 0.04, 0.13, 18), this.matMouth);
     cav.position.set(0, -0.25, 0.33); H.add(cav);
     const throat = new THREE.Mesh(ellipsoid(0.06, 0.045, 0.05, 12), this.matThroat);
     throat.position.set(0, -0.27, 0.24); H.add(throat);
-    // «заполнитель» полости: растёт по мере открытия рта и закрывает череп изнутри
+    // cavity filler: grows as the jaw opens and hides the skull behind the mouth
     this.mouthFill = new THREE.Mesh(ellipsoid(1, 1, 1, 20), new THREE.MeshStandardMaterial({ color: 0xa8404f, roughness: 0.5, emissive: 0x2a080e, side: THREE.BackSide }));
     this.mouthFill.visible = false; H.add(this.mouthFill);
-    // нёбо с поперечными валиками
+    // palate with transverse ridges
     const pal = new THREE.Mesh(ellipsoid(0.072, 0.022, 0.13, 18), this.matPalate);
     pal.position.set(0, -0.232, 0.37); H.add(pal);
     for (let i = 0; i < 5; i++) {
       const r = new THREE.Mesh(new THREE.TorusGeometry(0.05 - i * 0.004, 0.0045, 5, 16, Math.PI), this.matGum);
       r.rotation.x = Math.PI / 2; r.position.set(0, -0.247, 0.43 - i * 0.028); r.scale.set(0.9, 0.6, 1); H.add(r);
     }
-    // верхняя десна и зубы
+    // upper gum and teeth
     const gumU = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 8, 24, Math.PI), this.matGum);
     gumU.rotation.x = Math.PI / 2; gumU.position.set(0, -0.232, 0.415); gumU.scale.set(1, 1.15, 1); H.add(gumU);
     const fang = (len, r) => { const g = new THREE.ConeGeometry(r, len, 10); g.translate(0, -len / 2, 0); return g; };
     for (const s of [-1, 1]) {
-      // клык — слегка изогнут назад
+      // canine, slightly curved back
       const c = new THREE.Mesh(fang(0.048, 0.015), this.matTooth);
       c.position.set(0.046 * s, -0.24, 0.475); c.rotation.set(-0.15, 0, 0.06 * s); H.add(c);
-      // премоляры
+      // premolars
       for (let i = 0; i < 2; i++) {
         const pm = new THREE.Mesh(fang(0.03, 0.011), this.matTooth);
         pm.position.set(0.058 * s, -0.244, 0.43 - i * 0.04); H.add(pm);
@@ -522,13 +520,13 @@ export class Cat {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0045, 0.02, 6), this.matTooth);
       t.position.set(Math.sin(a) * 0.034, -0.25, 0.445 + Math.cos(a) * 0.042); H.add(t);
     }
-    // верхняя губа — чёрная кромка
+    // upper lip: black edge
     const lipU = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 6, 28, Math.PI), this.matLip);
     lipU.rotation.x = Math.PI / 2; lipU.position.set(0, -0.247, 0.45); lipU.scale.set(1, 1.15, 1); H.add(lipU);
 
-    // нижняя челюсть
+    // lower jaw
     this.jaw = G(); this.jaw.position.set(0, -0.21, 0.285); H.add(this.jaw);
-    // подбородок с рыжеватым оттенком (как на фото)
+    // chin with a reddish-brown tint (as in the photos)
     this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.8 });
     const floor = new THREE.Mesh(ellipsoid(0.07, 0.018, 0.12, 16), this.matMouth);
     floor.position.set(0, -0.03, 0.12); this.jaw.add(floor);
@@ -547,14 +545,14 @@ export class Cat {
       const t = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.004, 0.016, 6), this.matTooth);
       t.position.set(Math.sin(a) * 0.03, -0.012, 0.165 + Math.cos(a) * 0.045); this.jaw.add(t);
     }
-    // язык: плоский, со скруглённым кончиком, бороздкой и шершавостью
+    // tongue: flat, rounded tip, central groove
     this.tongue = G(); this.tongue.position.set(0, 0.0, 0.04); this.jaw.add(this.tongue);
     const tg = ellipsoid(0.058, 0.02, 0.13, 24);
     { const pa = tg.attributes.position;
       for (let i = 0; i < pa.count; i++) {
         const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
-        const w = 1 + 0.25 * THREE.MathUtils.smoothstep(z, -0.05, 0.08);     // шире к кончику
-        const groove = y > 0 ? -0.006 * Math.exp(-(x * x) / 0.0002) : 0;     // бороздка посередине
+        const w = 1 + 0.25 * THREE.MathUtils.smoothstep(z, -0.05, 0.08);     // wider towards the tip
+        const groove = y > 0 ? -0.006 * Math.exp(-(x * x) / 0.0002) : 0;     // central groove
         pa.setXYZ(i, x * w, y + groove + (y > 0 ? 0.004 * Math.max(0, z) : 0), z);
       }
       tg.computeVertexNormals(); }
@@ -563,7 +561,7 @@ export class Cat {
     this.tongue.add(this.tongueMesh);
   }
 
-  // ---------- туловище-лофт ----------
+  // ---------- Body loft ----------
   buildBody() {
     const NR = 46, NA = 30;
     this.bodyN = [NR, NA];
@@ -581,7 +579,7 @@ export class Cat {
     this.breath = 0;
     this.updateBody();
     g.setAttribute('furP', g.attributes.position.clone());
-    // пушистая грудка: ворс длиннее спереди-снизу
+    // fluffy chest and neck ruff: longer fur at the front-bottom
     { const pos = g.attributes.position, k = new Float32Array(pos.count), d = new Float32Array(pos.count * 3);
       for (let i = 0; i <= NR; i++) for (let j = 0; j <= NA; j++) {
         const id = i * (NA + 1) + j, s = i / NR, sa = Math.sin((j / NA) * Math.PI * 2);
@@ -612,7 +610,7 @@ export class Cat {
     V.up.set(0, 1, 0).applyQuaternion(pel.quaternion);
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
-    // профиль: s, полуширина, полувысота, смещение вниз
+    // profile: s, half-width, half-height, vertical offset
     const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.33, 0.45, 0.53, -0.03], [0.5, 0.46, 0.56, 0], [0.66, 0.41, 0.49, 0], [0.82, 0.29, 0.32, 0], [1, 0.27, 0.29, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
@@ -653,7 +651,7 @@ export class Cat {
     this.bodyGeo.computeBoundingSphere();
   }
 
-  // пальчики — бугорки по переднему краю лапки
+  // toes: bumps along the front edge of the paw
   addToes(paw, r, len) {
     const k = r / 0.13;
     for (let i = 0; i < 4; i++) {
@@ -680,7 +678,7 @@ export class Cat {
     if (c) this.collarMat.color.set(c);
   }
 
-  // применить вектор параметров
+  // apply a parameter vector to the rig
   apply(P, t) {
     this.root.position.y = 0.1 + P.rootY;
     this.torso.position.set(0, P.torsoY, P.torsoZ);
@@ -709,7 +707,7 @@ export class Cat {
       const s = i === 0 ? 1 : -1;
       w.rotation.y = -P.whisk * 0.6 * s;
     }
-    // передние лапы
+    // legs
     const flatF = P.flat;
     for (const side of ['L', 'R']) {
       const L = this.fl[side];
@@ -725,7 +723,7 @@ export class Cat {
       const sumB = P.pitch + P.pelvisBend + P['blH_' + side] + P['blK_' + side] + P['blA_' + side];
       B.ft.rotation.x = -sumB * flatF + P['blP_' + side];
     }
-    // хвост
+    // tail
     const N = this.tail.length;
     for (let i = 0; i < N; i++) {
       const g = this.tail[i];

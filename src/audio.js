@@ -1,4 +1,4 @@
-// Синтезированные звуки: мяу и мурчание (без файлов)
+// Synthesized sounds: meow, purr, boop and hiss (no audio files)
 export class CatAudio {
   constructor() { this.ctx = null; this.muted = false; this.purrGain = null; }
 
@@ -31,7 +31,7 @@ export class CatAudio {
     const lfo = c.createOscillator(); lfo.frequency.value = 26;
     const lfoGain = c.createGain(); lfoGain.gain.value = 0.5;
     lfo.connect(lfoGain).connect(am.gain);
-    // медленное «вдох-выдох»
+    // slow in/out breathing
     const breath = c.createOscillator(); breath.frequency.value = 0.55;
     const bg = c.createGain(); bg.gain.value = 0.15;
     breath.connect(bg).connect(am.gain);
@@ -61,7 +61,7 @@ export class CatAudio {
     env.gain.linearRampToValueAtTime(0.35, t + 0.06);
     env.gain.setValueAtTime(0.35, t + dur * 0.6);
     env.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    // форманты «и-а-у»
+    // "ee-ah-oo" formants
     const f1 = c.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 6;
     f1.frequency.setValueAtTime(900, t); f1.frequency.linearRampToValueAtTime(1300, t + dur * 0.4); f1.frequency.linearRampToValueAtTime(700, t + dur);
     const f2 = c.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 8;

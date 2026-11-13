@@ -1,8 +1,8 @@
-// Библиотека поз. Каждая поза — переопределения базовых параметров (BASE).
+// Pose library. Each pose overrides some of the base parameters (BASE).
 import { BASE } from './cat.js';
 
 const both = (o) => {
-  // flS: 0.2 -> flS_L и flS_R
+  // flS: 0.2 -> flS_L and flS_R
   const r = {};
   for (const [k, v] of Object.entries(o)) {
     if (/^(fl|bl)[A-Z]$/.test(k)) { r[k + '_L'] = v; r[k + '_R'] = v; }
