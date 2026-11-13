@@ -3,7 +3,7 @@
 An interactive 3D model of my black Scottish Fold cat, Chernushka, that runs in the browser.
 Everything is built procedurally with [Three.js](https://threejs.org/): no external models, no build step.
 
-**Live demo:** https://&lt;your-login&gt;.github.io/black-cat-model/
+**Live demo:** https://victornagibator.github.io/black-cat-model/
 
 ![Chernushka](docs/preview.jpg)
 
