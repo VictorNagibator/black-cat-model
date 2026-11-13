@@ -145,6 +145,24 @@ function capsuleDown(r, len, r2) {
   return g;
 }
 
+// трубка, сужающаяся к концу (усы)
+function taperTube(curve, segs, r, tip = 0.15, radial = 5) {
+  const g = new THREE.TubeGeometry(curve, segs, r, radial, false);
+  const p = g.attributes.position, c = new THREE.Vector3(), v = new THREE.Vector3();
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs;
+    curve.getPointAt(t, c);
+    const k = THREE.MathUtils.lerp(1, tip, Math.pow(t, 0.8));
+    for (let j = 0; j <= radial; j++) {
+      const idx = i * (radial + 1) + j;
+      v.fromBufferAttribute(p, idx).sub(c).multiplyScalar(k).add(c);
+      p.setXYZ(idx, v.x, v.y, v.z);
+    }
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 export class Cat {
   constructor() {
     this.root = new THREE.Group();
@@ -158,7 +176,8 @@ export class Cat {
     this.matMouth = new THREE.MeshStandardMaterial({ color: 0x5e2630, roughness: 0.6 });
     this.matTongue = new THREE.MeshPhysicalMaterial({ color: 0xd9788a, roughness: 0.4, clearcoat: 0.4 });
     this.matTooth = new THREE.MeshStandardMaterial({ color: 0xf4efe6, roughness: 0.3 });
-    this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.4 });
+    this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.35 });
+    this.matWhiskerDark = new THREE.MeshStandardMaterial({ color: 0x55504c, roughness: 0.4 });
     this.eyeMats = [];
     this.build();
   }
@@ -302,10 +321,9 @@ export class Cat {
           pts.push(new THREE.Vector3(dir.x * len * t, yy + dir.y * len * t - 0.12 * t * t, dir.z * len * t + 0.02 * Math.sin(t * 3)));
         }
         const curve = new THREE.CatmullRomCurve3(pts);
-        const tube = new THREE.TubeGeometry(curve, 12, 0.0035, 4, false);
-        // сужение к кончику
-        const p = tube.attributes.position;
-        const w = new THREE.Mesh(tube, this.matWhisker);
+        const tube = taperTube(curve, 14, 0.0055, 0.12);
+        // пара тёмных усов у основания, как на фото
+        const w = new THREE.Mesh(tube, i === 1 || i === 6 ? this.matWhiskerDark : this.matWhisker);
         wg.add(w);
       }
       this.whiskers.push(wg);
@@ -318,7 +336,7 @@ export class Cat {
           const t = k / 4;
           pts.push(new THREE.Vector3(s * (0.5 + i * 0.3) * t * len, (0.55 - i * 0.15) * t * len, 0.45 * t * len - 0.04 * t * t));
         }
-        bg.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 8, 0.0028, 4), this.matWhisker));
+        bg.add(new THREE.Mesh(taperTube(new THREE.CatmullRomCurve3(pts), 8, 0.0042, 0.15), this.matWhisker));
       }
     }
 
@@ -334,6 +352,7 @@ export class Cat {
       const paw = G(); wr.add(paw);
       this.addPart(paw, ellipsoid(0.13, 0.105, 0.17), [0, -0.01, 0.06], 'paw');
       this.addPads(paw, 0.13);
+      this.addToes(paw, 0.13, 0.17);
       this.fl[side] = { sh, el, wr, paw, s };
     }
     // ---- задние лапы ----
@@ -349,6 +368,7 @@ export class Cat {
       const ft = G(); ft.position.set(0, -0.46, 0); hk.add(ft);
       this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw');
       this.addPads(ft, 0.12);
+      this.addToes(ft, 0.12, 0.18);
       this.bl[side] = { hp, kn, hk, ft, s };
     }
 
@@ -442,6 +462,16 @@ export class Cat {
     this.bodyGeo.attributes.position.needsUpdate = true;
     this.bodyGeo.computeVertexNormals();
     this.bodyGeo.computeBoundingSphere();
+  }
+
+  // пальчики — бугорки по переднему краю лапки
+  addToes(paw, r, len) {
+    const k = r / 0.13;
+    for (let i = 0; i < 4; i++) {
+      const x = (i - 1.5) * 0.052 * k;
+      const z = 0.06 + len * 0.92 - Math.abs(i - 1.5) * 0.035 * k;
+      this.addPart(paw, ellipsoid(0.045 * k, 0.058 * k, 0.06 * k, 12), [x * 1.1, -0.035, z], 'paw', this.fur, { fur: false });
+    }
   }
 
   addPads(paw, r) {
