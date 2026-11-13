@@ -177,7 +177,7 @@ export class Cat {
     this.furChin = furSet(0x24170f, 0x8a6550, 150, 0.024);
     this.matPad = new THREE.MeshStandardMaterial({ color: 0x5a4549, roughness: 0.55 });
     this.matNose = new THREE.MeshPhysicalMaterial({ color: 0x2b2627, roughness: 0.45, clearcoat: 0.5, clearcoatRoughness: 0.35 });
-    this.matMouth = new THREE.MeshStandardMaterial({ color: 0x5e2630, roughness: 0.6 });
+    this.matMouth = new THREE.MeshStandardMaterial({ color: 0x9a3a4a, roughness: 0.5, emissive: 0x3a0e16 });
     this.matTongue = new THREE.MeshPhysicalMaterial({ color: 0xd9788a, roughness: 0.4, clearcoat: 0.4 });
     this.matTooth = new THREE.MeshStandardMaterial({ color: 0xf4efe6, roughness: 0.3 });
     this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.35 });
@@ -304,20 +304,7 @@ export class Cat {
     const line = (pts, r) => new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((q) => new THREE.Vector3(...q))), 8, r, 5), dark);
     H.add(line([[0, -0.14, 0.558], [0, -0.18, 0.55], [0, -0.215, 0.535]], 0.005));
     for (const s of [-1, 1]) H.add(line([[0, -0.215, 0.535], [0.04 * s, -0.233, 0.52], [0.075 * s, -0.238, 0.49]], 0.004));
-    // ротик внутри
-    const mouth = new THREE.Mesh(ellipsoid(0.08, 0.055, 0.13, 16), this.matMouth);
-    mouth.position.set(0, -0.255, 0.34); H.add(mouth);
-    // клыки
-    for (const s of [-1, 1]) {
-      const f = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.06, 8), this.matTooth);
-      f.rotation.x = Math.PI; f.position.set(0.04 * s, -0.255, 0.5); H.add(f);
-    }
-    // челюсть с рыжеватым подбородком (как на фото)
-    this.jaw = G(); this.jaw.position.set(0, -0.21, 0.285); H.add(this.jaw);
-    this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.8 });
-    this.tongue = G(); this.tongue.position.set(0, -0.05, 0.06); this.jaw.add(this.tongue);
-    const tg = ellipsoid(0.065, 0.02, 0.13, 16);
-    this.tongueMesh = new THREE.Mesh(tg, this.matTongue); this.tongue.add(this.tongueMesh);
+    this.buildMouth(H);
 
     // глаза: круглые, широко посаженные, внешние уголки чуть вверх
     this.eyes = []; this.lids = [];
@@ -498,6 +485,84 @@ export class Cat {
     this.tailGeo.computeBoundingSphere();
   }
 
+  // ---------- рот: нёбо, зубы, дёсны, язык ----------
+  buildMouth(H) {
+    const G = () => new THREE.Group();
+    // ротовая полость: тёмное горло и розовые стенки
+    const cav = new THREE.Mesh(ellipsoid(0.075, 0.04, 0.13, 18), this.matMouth);
+    cav.position.set(0, -0.25, 0.33); H.add(cav);
+    const throat = new THREE.Mesh(ellipsoid(0.06, 0.045, 0.05, 12), this.matThroat);
+    throat.position.set(0, -0.27, 0.24); H.add(throat);
+    // «заполнитель» полости: растёт по мере открытия рта и закрывает череп изнутри
+    this.mouthFill = new THREE.Mesh(ellipsoid(1, 1, 1, 20), new THREE.MeshStandardMaterial({ color: 0xa8404f, roughness: 0.5, emissive: 0x2a080e, side: THREE.BackSide }));
+    this.mouthFill.visible = false; H.add(this.mouthFill);
+    // нёбо с поперечными валиками
+    const pal = new THREE.Mesh(ellipsoid(0.072, 0.022, 0.13, 18), this.matPalate);
+    pal.position.set(0, -0.232, 0.37); H.add(pal);
+    for (let i = 0; i < 5; i++) {
+      const r = new THREE.Mesh(new THREE.TorusGeometry(0.05 - i * 0.004, 0.0045, 5, 16, Math.PI), this.matGum);
+      r.rotation.x = Math.PI / 2; r.position.set(0, -0.247, 0.43 - i * 0.028); r.scale.set(0.9, 0.6, 1); H.add(r);
+    }
+    // верхняя десна и зубы
+    const gumU = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 8, 24, Math.PI), this.matGum);
+    gumU.rotation.x = Math.PI / 2; gumU.position.set(0, -0.232, 0.415); gumU.scale.set(1, 1.15, 1); H.add(gumU);
+    const fang = (len, r) => { const g = new THREE.ConeGeometry(r, len, 10); g.translate(0, -len / 2, 0); return g; };
+    for (const s of [-1, 1]) {
+      // клык — слегка изогнут назад
+      const c = new THREE.Mesh(fang(0.048, 0.015), this.matTooth);
+      c.position.set(0.046 * s, -0.24, 0.475); c.rotation.set(-0.15, 0, 0.06 * s); H.add(c);
+      // премоляры
+      for (let i = 0; i < 2; i++) {
+        const pm = new THREE.Mesh(fang(0.03, 0.011), this.matTooth);
+        pm.position.set(0.058 * s, -0.244, 0.43 - i * 0.04); H.add(pm);
+      }
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i - 2.5) * 0.28;
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0045, 0.02, 6), this.matTooth);
+      t.position.set(Math.sin(a) * 0.034, -0.25, 0.445 + Math.cos(a) * 0.042); H.add(t);
+    }
+    // верхняя губа — чёрная кромка
+    const lipU = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 6, 28, Math.PI), this.matLip);
+    lipU.rotation.x = Math.PI / 2; lipU.position.set(0, -0.247, 0.45); lipU.scale.set(1, 1.15, 1); H.add(lipU);
+
+    // нижняя челюсть
+    this.jaw = G(); this.jaw.position.set(0, -0.21, 0.285); H.add(this.jaw);
+    // подбородок с рыжеватым оттенком (как на фото)
+    this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.8 });
+    const floor = new THREE.Mesh(ellipsoid(0.07, 0.018, 0.12, 16), this.matMouth);
+    floor.position.set(0, -0.03, 0.12); this.jaw.add(floor);
+    const gumL = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.011, 8, 24, Math.PI), this.matGum);
+    gumL.rotation.x = Math.PI / 2; gumL.position.set(0, -0.022, 0.16); gumL.scale.set(1, 1.2, 1); this.jaw.add(gumL);
+    const lipL = new THREE.Mesh(new THREE.TorusGeometry(0.068, 0.008, 6, 28, Math.PI), this.matLip);
+    lipL.rotation.x = Math.PI / 2; lipL.position.set(0, -0.02, 0.16); lipL.scale.set(1, 1.2, 1); this.jaw.add(lipL);
+    for (const s of [-1, 1]) {
+      const c = new THREE.Mesh(fang(0.05, 0.013), this.matTooth);
+      c.rotation.set(Math.PI + 0.2, 0, 0); c.position.set(0.042 * s, -0.02, 0.205); this.jaw.add(c);
+      const pm = new THREE.Mesh(fang(0.025, 0.01), this.matTooth);
+      pm.rotation.x = Math.PI; pm.position.set(0.055 * s, -0.02, 0.15); this.jaw.add(pm);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i - 2.5) * 0.3;
+      const t = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.004, 0.016, 6), this.matTooth);
+      t.position.set(Math.sin(a) * 0.03, -0.012, 0.165 + Math.cos(a) * 0.045); this.jaw.add(t);
+    }
+    // язык: плоский, со скруглённым кончиком, бороздкой и шершавостью
+    this.tongue = G(); this.tongue.position.set(0, 0.0, 0.04); this.jaw.add(this.tongue);
+    const tg = ellipsoid(0.058, 0.02, 0.13, 24);
+    { const pa = tg.attributes.position;
+      for (let i = 0; i < pa.count; i++) {
+        const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+        const w = 1 + 0.25 * THREE.MathUtils.smoothstep(z, -0.05, 0.08);     // шире к кончику
+        const groove = y > 0 ? -0.006 * Math.exp(-(x * x) / 0.0002) : 0;     // бороздка посередине
+        pa.setXYZ(i, x * w, y + groove + (y > 0 ? 0.004 * Math.max(0, z) : 0), z);
+      }
+      tg.computeVertexNormals(); }
+    tg.translate(0, 0, 0.08);
+    this.tongueMesh = new THREE.Mesh(tg, new THREE.MeshPhysicalMaterial({ color: 0xd9788a, roughness: 0.55, clearcoat: 0.35, clearcoatRoughness: 0.4, sheen: 0.6, sheenColor: new THREE.Color(0xffc0c8) }));
+    this.tongue.add(this.tongueMesh);
+  }
+
   // ---------- туловище-лофт ----------
   buildBody() {
     const NR = 46, NA = 30;
@@ -626,8 +691,10 @@ export class Cat {
     this.head.rotation.set(P.headPitch, P.headYaw, P.headRoll, 'YXZ');
     this.updateBody();
     this.jaw.rotation.x = P.jaw * 1.0;
-    this.tongue.position.z = 0.06 + P.tongue * 0.34;
-    this.tongue.position.y = -0.05 + P.tongue * 0.035;
+    { const j = P.jaw; this.mouthFill.visible = j > 0.03;
+      this.mouthFill.scale.set(0.07, 0.012 + 0.085 * j, 0.11); this.mouthFill.position.set(0, -0.245 - 0.07 * j, 0.37); }
+    this.tongue.position.z = 0.01 + P.tongue * 0.33;
+    this.tongue.position.y = -0.012 + P.tongue * 0.025;
     this.tongue.rotation.x = P.tongue * 0.35 - P.tongueUp * 0.9;
     for (const l of this.lids) {
       l.up.rotation.x = THREE.MathUtils.lerp(-1.05, 0.26, P.lidUp);

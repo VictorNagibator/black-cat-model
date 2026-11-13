@@ -225,7 +225,7 @@ const ACTIONS = {
   ]),
   blep: () => play('blep', [
     { d: 0.3, set: { tongue: 0.12 } },
-    { d: 4.0, set: { tongue: 0.42, lidUp: 0.3 }, emote: 'блеп' },
+    { d: 4.0, set: { tongue: 0.34, lidUp: 0.3 }, emote: 'блеп' },
     { d: 0.4, set: { tongue: 0 } },
   ]),
   sniff: () => {
