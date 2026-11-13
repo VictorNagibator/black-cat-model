@@ -122,8 +122,8 @@ export const BASE = {
   earBack: 0, whisk: 0, look: 1, flat: 1,
   flS_L: 0.15, flE_L: -0.25, flW_L: 0.1, flZ_L: 0, flP_L: 0,
   flS_R: 0.15, flE_R: -0.25, flW_R: 0.1, flZ_R: 0, flP_R: 0,
-  blH_L: -0.5, blK_L: 1.25, blA_L: -1.0, blZ_L: 0, blP_L: 0,
-  blH_R: -0.5, blK_R: 1.25, blA_R: -1.0, blZ_R: 0, blP_R: 0,
+  blH_L: -0.42, blK_L: 1.25, blA_L: -1.07, blZ_L: 0, blP_L: 0,
+  blH_R: -0.42, blK_R: 1.25, blA_R: -1.07, blZ_R: 0, blP_R: 0,
   tailPitch: -0.75, tailYaw: 0, tailBendX: 0.07, tailBendY: 0, tailWave: 0.12, tailWaveSpeed: 1,
 };
 
@@ -369,12 +369,17 @@ export class Cat {
     this.bl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const hp = G(); hp.position.set(0.3 * s, -0.05, -0.1); this.pelvis.add(hp);
-      this.addPart(hp, ellipsoid(0.27, 0.44, 0.42), [0.01 * s, -0.15, 0.03], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.2 });
-      this.addPart(hp, capsuleDown(0.17, 0.5, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0] });
+      // бедро — широкое, мускулистое, плавно уходит в туловище
+      this.addPart(hp, ellipsoid(0.25, 0.48, 0.38), [0.02 * s, -0.2, 0.02], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.2 });
+      this.addPart(hp, capsuleDown(0.19, 0.5, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0] });
       const kn = G(); kn.position.set(0, -0.62, 0); hp.add(kn);
-      this.addPart(kn, capsuleDown(0.11, 0.58, 0.085), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      this.addPart(kn, capsuleDown(0.11, 0.58, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      // икра — сзади голени
+      this.addPart(kn, ellipsoid(0.1, 0.24, 0.12), [0, -0.2, -0.05], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
       const hk = G(); hk.position.set(0, -0.68, 0); kn.add(hk);
-      this.addPart(hk, capsuleDown(0.085, 0.36, 0.08), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
+      this.addPart(hk, capsuleDown(0.08, 0.36, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
+      // пяточка (скакательный сустав)
+      this.addPart(hk, ellipsoid(0.075, 0.08, 0.09), [0, 0.0, -0.03], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
       const ft = G(); ft.position.set(0, -0.46, 0); hk.add(ft);
       this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
       this.addPads(ft, 0.12);
