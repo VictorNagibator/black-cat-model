@@ -4,12 +4,14 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Cat, BASE } from './cat.js';
 import { POSES, poseOf, both } from './poses.js';
 import { CatAudio } from './audio.js';
+import { t, getLang, setLang, applyI18n, store } from './i18n.js';
 
 const $ = (s) => document.querySelector(s);
-const params = new URLSearchParams(location.search);
+// `?debug` keeps the drawing buffer (for screenshots) and exposes `window.app` for tinkering in the console.
+const DEBUG = new URLSearchParams(location.search).has('debug');
 
-// ---------- Сцена ----------
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: params.has('debug') });
+// ---------- Scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: DEBUG });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -49,12 +51,12 @@ const fill = new THREE.DirectionalLight(0xffd6c2, 0.6);
 fill.position.set(-8, 3, 6);
 scene.add(fill);
 
-// пол и пушистый коврик (как на фото)
+// floor and a fluffy shag rug (like the one in the photos)
 const floor = new THREE.Mesh(new THREE.CircleGeometry(60, 64), new THREE.MeshStandardMaterial({ color: 0xcdb8a3, roughness: 0.95 }));
 floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
 {
   const rugGeo = new THREE.CylinderGeometry(8.5, 8.6, 0.12, 96, 1);
-  // текстура пушистого ковра (рисуем ворсинки на canvas)
+  // rug texture: short curly strokes drawn on a canvas
   const cv = document.createElement('canvas'); cv.width = cv.height = 1024;
   const g = cv.getContext('2d');
   g.fillStyle = '#b9a39d'; g.fillRect(0, 0, 1024, 1024);
@@ -72,11 +74,11 @@ floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
   const rug = new THREE.Mesh(rugGeo, rugMat); rug.position.y = 0.06; rug.receiveShadow = true; scene.add(rug);
 }
 
-// ---------- Кошка ----------
+// ---------- Cat ----------
 const cat = new Cat();
 scene.add(cat.root);
 
-// мягкая контактная тень под кошкой (заземляет её на коврике)
+// soft contact shadow that grounds the cat on the rug
 const contact = (() => {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
     transparent: true, depthWrite: false,
@@ -101,11 +103,11 @@ function updateContact() {
   contact.scale.set((2.4 + lying * 1.2) * (1 + lift * 0.3), len * 1.35, 1);
   contact.material.uniforms.uOpacity.value = 0.7 * Math.max(0, 1 - lift * 0.8);
 }
-const P = poseOf(params.get('pose') || 'stand');
-let poseName = params.get('pose') || 'stand';
+const P = poseOf('stand');
+let poseName = 'stand';
 const audio = new CatAudio();
 
-// ---------- Предметы ----------
+// ---------- Props ----------
 function makeSock() {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: 0x8d8f96, roughness: 1 });
@@ -138,14 +140,14 @@ function setProp(obj, pos) {
   if (obj) { obj.position.copy(pos); scene.add(obj); }
 }
 
-// лазерная точка
+// laser pointer dot
 const laserDot = new THREE.Mesh(new THREE.CircleGeometry(0.09, 20), new THREE.MeshBasicMaterial({ color: 0xff2030, toneMapped: false }));
 laserDot.rotation.x = -Math.PI / 2;
 const laserGlow = new THREE.Mesh(new THREE.CircleGeometry(0.28, 20), new THREE.MeshBasicMaterial({ color: 0xff3040, transparent: true, opacity: 0.35, toneMapped: false, depthWrite: false }));
 laserGlow.position.z = 0.002; laserDot.add(laserGlow);
 laserDot.visible = false; scene.add(laserDot);
 
-// ---------- Эмоции (всплывающие надписи) ----------
+// ---------- Emotes (floating speech bubbles) ----------
 const emoteLayer = $('#emotes');
 function emote(text, cls = '') {
   const el = document.createElement('div');
@@ -166,7 +168,7 @@ function updateEmotes() {
   }
 }
 
-// ---------- Мозг ----------
+// ---------- Behaviour ----------
 const brain = {
   action: null,       // { steps, i, t, name }
   walkTarget: null,
@@ -187,7 +189,7 @@ function setPose(name) {
   updateUI();
 }
 
-// действие: список шагов {d, set, add, fn(t, P), rate, enter()}
+// an action is a list of steps: { d, set, add, fn(t, P), rate, enter(), emote, sound, pose }
 function play(name, steps, opts = {}) {
   brain.action = { name, steps, i: -1, t: 0, ...opts };
   nextStep();
@@ -199,12 +201,12 @@ function nextStep() {
   if (a.i >= a.steps.length) { const done = a.onDone; brain.action = null; done && done(); return; }
   const s = a.steps[a.i];
   s.enter && s.enter();
-  if (s.emote) emote(s.emote, s.emoteCls);
+  if (s.emote) emote(t(s.emote), s.emoteCls);
   if (s.sound === 'meow') audio.meow(s.kind);
   if (s.pose) setPose(s.pose);
 }
 function needPose(names, steps) {
-  // если поза не та — сначала перейти в нужную
+  // switch to a suitable pose first if needed
   if (names.includes(poseName)) return steps;
   return [{ d: 1.4, pose: names[0] }, ...steps];
 }
@@ -220,12 +222,12 @@ const ACTIONS = {
   ]),
   meow: () => play('meow', [
     { d: 0.15, add: { headPitch: -0.12 } },
-    { d: 0.55, add: { headPitch: -0.2 }, set: { jaw: 0.55, lidUp: 0.15, pupil: 0.7 }, sound: 'meow', emote: 'мяу!', rate: 10 },
+    { d: 0.55, add: { headPitch: -0.2 }, set: { jaw: 0.55, lidUp: 0.15, pupil: 0.7 }, sound: 'meow', emote: 'e.meow', rate: 10 },
     { d: 0.4, set: { jaw: 0 } },
   ]),
   blep: () => play('blep', [
     { d: 0.3, set: { tongue: 0.12 } },
-    { d: 4.0, set: { tongue: 0.34, lidUp: 0.3 }, emote: 'блеп' },
+    { d: 4.0, set: { tongue: 0.34, lidUp: 0.3 }, emote: 'e.blep' },
     { d: 0.4, set: { tongue: 0 } },
   ]),
   sniff: () => {
@@ -234,7 +236,7 @@ const ACTIONS = {
     const sock = makeSock(); sock.rotation.y = R(0, Math.PI * 2);
     play('sniff', needPose(['stand', 'sit'], [
       { d: 0.8, enter: () => { setProp(sock, at); brain.extraLook = at.clone().setY(0.25); }, set: { pupil: 0.8 }, emote: '?' },
-      { d: 1.4, fn: (t, p) => { p.whisk = 0.6; p.headPitch += Math.sin(t * 38) * 0.03; p.neckPitch += 0.15; }, emote: 'нюх-нюх' },
+      { d: 1.4, fn: (t, p) => { p.whisk = 0.6; p.headPitch += Math.sin(t * 38) * 0.03; p.neckPitch += 0.15; }, emote: 'e.sniff' },
       { d: 0.5, enter: () => { brain.extraLook = null; }, add: { headPitch: -0.3, neckPitch: -0.1 }, set: { jaw: 0.24, lidUp: 0.5, whisk: 0.3, earBack: 0.3 } },
       { d: 2.2, add: { headPitch: -0.32, neckPitch: -0.1 }, set: { jaw: 0.27, lidUp: 0.6, lidLow: 0.3, whisk: 0.35, earBack: 0.35, pupil: 0.5 }, emote: '😮' },
       { d: 0.5, set: { jaw: 0, tongue: 0.25, tongueUp: 0.7 } },
@@ -254,12 +256,12 @@ const ACTIONS = {
     { d: 0.5 },
   ].map(fixBoth))),
   boop: () => { audio.boop(); play('boop', [
-    { d: 0.14, set: { lidUp: 1, lidLow: 0.7, earBack: 0.3 }, add: { headPitch: -0.14 }, emote: 'буп!', emoteCls: 'big', rate: 25 },
+    { d: 0.14, set: { lidUp: 1, lidLow: 0.7, earBack: 0.3 }, add: { headPitch: -0.14 }, emote: 'e.boop', emoteCls: 'big', rate: 25 },
     { d: 0.3, set: { whisk: 0.4, pupil: 0.8 }, add: { headPitch: -0.06 } },
     { d: 0.45, set: { tongue: 0.25, tongueUp: 0.75 } },
   ]); },
   tail: () => { audio.hiss(); play('tail', [
-    { d: 1.0, set: { tailWave: 0.7, tailWaveSpeed: 5, earBack: 1, lidUp: 0.35, pupil: 0.15 }, emote: 'не трогай хвост!', rate: 8 },
+    { d: 1.0, set: { tailWave: 0.7, tailWaveSpeed: 5, earBack: 1, lidUp: 0.35, pupil: 0.15 }, emote: 'e.tail', rate: 8 },
     { d: 0.5, set: { earBack: 0.4 } },
   ]); },
   trap: () => play('trap', [
@@ -268,7 +270,7 @@ const ACTIONS = {
       const k = Math.sin(t * 20);
       p.blH_L = -0.95 + k * 0.4; p.blH_R = -0.95 - k * 0.4; p.blK_L = 1.3 - k * 0.4; p.blK_R = 1.3 + k * 0.4;
       p.jaw = 0.3; p.earBack = 1; p.pupil = 0.95; p.headPitch -= 0.2;
-    }, emote: 'попался!', rate: 14 },
+    }, emote: 'e.trap', rate: 14 },
     { d: 0.6 },
   ]),
 };
@@ -276,7 +278,7 @@ function fixBoth(s) { if (s.set) s.set = both(s.set); return s; }
 
 function forward() { return new THREE.Vector3(Math.sin(brain.yaw), 0, Math.cos(brain.yaw)); }
 
-// ---------- Ввод ----------
+// ---------- Input ----------
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 let pointerDown = null;
@@ -337,8 +339,8 @@ function clickPart(part) {
   if (part === 'nose') return ACTIONS.boop();
   if (part === 'tail') return ACTIONS.tail();
   if (poseName === 'back' && (part === 'body' || part === 'paw')) return ACTIONS.trap();
-  if (poseName === 'sleep') { setPose('side'); emote('м?'); return; }
-  if (part === 'head') { emote('мр?'); audio.meow('chirp'); return play('chirp', [{ d: 0.3, set: { jaw: 0.25, lidUp: 0.3 }, add: { headRoll: 0.25 } }, { d: 0.4, add: { headRoll: 0.2 } }]); }
+  if (poseName === 'sleep') { setPose('side'); emote(t('e.wake')); return; }
+  if (part === 'head') { emote(t('e.chirp')); audio.meow('chirp'); return play('chirp', [{ d: 0.3, set: { jaw: 0.25, lidUp: 0.3 }, add: { headRoll: 0.25 } }, { d: 0.4, add: { headRoll: 0.2 } }]); }
   if (part === 'paw') { emote('🐾'); return play('paw', [{ d: 0.6, set: { flP_L: 0.6, pupil: 0.8 } }]); }
   startPet(part); setTimeout(stopPet, 1500);
 }
@@ -365,9 +367,17 @@ $('#life').addEventListener('change', (e) => { brain.life = e.target.checked; })
 brain.life = true;
 $('#collar').addEventListener('change', (e) => cat.setCollar(e.target.value === 'none' ? null : e.target.value));
 cat.setCollar('#e8679f');
+// name: a custom one is remembered, otherwise the localized default ("Chernushka")
 const nameEl = $('#catName');
-try { const n = localStorage.getItem('catName'); if (n) nameEl.textContent = n; } catch {}
-nameEl.addEventListener('input', () => { try { localStorage.setItem('catName', nameEl.textContent.trim()); } catch {} });
+const renderName = () => { nameEl.textContent = store.get('catName') || t('defaultName'); };
+nameEl.addEventListener('input', () => store.set('catName', nameEl.textContent.trim()));
+nameEl.addEventListener('blur', () => { if (!nameEl.textContent.trim()) { store.set('catName', ''); renderName(); } });
+// language
+const langEl = $('#lang');
+langEl.value = getLang();
+langEl.addEventListener('change', () => { setLang(langEl.value); renderName(); });
+applyI18n();
+renderName();
 $('#panelToggle').addEventListener('click', () => document.body.classList.toggle('panel-hidden'));
 
 function updateUI() {
@@ -397,7 +407,7 @@ function throwToy() {
   brain.toyChase = { p, t: 0 };
 }
 
-// ---------- Обновление ----------
+// ---------- Update loop ----------
 const clock = new THREE.Clock();
 const T = { ...P };
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
@@ -411,7 +421,7 @@ function update(dt) {
   const now = performance.now();
   brain.idle += dt;
 
-  // --- цель позы ---
+  // --- target pose (+ current action step) ---
   Object.assign(T, BASE, POSES[poseName]);
   let rate = 3.2;
   const a = brain.action;
@@ -426,7 +436,7 @@ function update(dt) {
     brain.idle = 0;
   }
 
-  // --- прогулка к цели / игрушке / лазеру ---
+  // --- walking to a target / toy / laser ---
   let moving = 0;
   const toy = brain.toyChase;
   if (toy) {
@@ -439,8 +449,8 @@ function update(dt) {
       brain.toyChase = null;
       brain.extraLook = toy.p.clone().setY(0.3);
       play('toy', [
-        { d: 0.9, set: { pupil: 0.95 }, fn: (t, p) => { p.pelvisRoll = Math.sin(t * 18) * 0.12; p.torsoY = 1.35; p.pitch = 0.12; }, emote: 'вжух…' },
-        { d: 0.35, enter: () => { emote('цап!', 'big'); }, set: { flS: -1.1, flE: -0.2, jaw: 0.5, earBack: 0.3 }, rate: 14 },
+        { d: 0.9, set: { pupil: 0.95 }, fn: (t, p) => { p.pelvisRoll = Math.sin(t * 18) * 0.12; p.torsoY = 1.35; p.pitch = 0.12; }, emote: 'e.wiggle' },
+        { d: 0.35, enter: () => { emote(t('e.pounce'), 'big'); }, set: { flS: -1.1, flE: -0.2, jaw: 0.5, earBack: 0.3 }, rate: 14 },
         { d: 1.6, set: { jaw: 0, lidUp: 0.3 }, fn: (t, p) => { p.headPitch += 0.2; } },
       ].map(fixBoth), { onDone: () => { brain.extraLook = null; setTimeout(() => setProp(null), 1500); } });
     }
@@ -463,11 +473,11 @@ function update(dt) {
   } else if (brain.walkTarget && poseName !== 'stand' && !brain.jump) {
     if (!a) setPose('stand');
   }
-  // ограничение по коврику
+  // stay on the rug
   if (brain.pos.length() > 6.8) brain.pos.setLength(6.8);
   brain.walkSpeed = damp(brain.walkSpeed, moving, 6, dt);
 
-  // --- прыжок ---
+  // --- pounce ---
   if (brain.jump) {
     const j = brain.jump; j.t += dt;
     const k = Math.min(1, j.t / j.dur);
@@ -477,10 +487,10 @@ function update(dt) {
     Object.assign(T, both({ flS: -1.3 + k * 0.8, flE: -0.2, blH: 0.6, blK: 0.4, blA: -0.3 }));
     T.pitch = -0.25 + k * 0.4; T.tailPitch = 0.1; T.pupil = 1; T.earBack = 0.4;
     rate = 14;
-    if (k >= 1) { brain.jump = null; emote(['цап!', 'поймала!', '???'][Math.floor(R(0, 3))], 'big'); brain.laserState = 'land'; brain.landT = 0; }
+    if (k >= 1) { brain.jump = null; emote([t('e.pounce'), t('e.caught'), '???'][Math.floor(R(0, 3))], 'big'); brain.laserState = 'land'; brain.landT = 0; }
   }
 
-  // --- поглаживание ---
+  // --- petting ---
   if (brain.petting) {
     const pt = brain.petting; pt.t += dt; pt.heart -= dt;
     T.lidUp = Math.max(T.lidUp, 0.72); T.lidLow = Math.max(T.lidLow, 0.3);
@@ -488,17 +498,17 @@ function update(dt) {
     if (pt.part === 'head') { T.headRoll += pt.dx * 0.35 + Math.sin(pt.t * 2) * 0.08; T.headPitch -= 0.12; T.neckYaw += pt.dx * 0.2; }
     else if (poseName === 'stand') { T.tailPitch += 1.2; T.tailBendX = -0.04; T.chestBend -= 0.08; T.pelvisBend += 0.1; T.torsoY += 0.08; }
     else { T.tailWave = 0.05; }
-    if (pt.heart <= 0) { emote(Math.random() < 0.7 ? '❤' : 'мурр', 'heart'); pt.heart = R(0.5, 0.9); }
+    if (pt.heart <= 0) { emote(Math.random() < 0.7 ? '❤' : t('e.purr'), 'heart'); pt.heart = R(0.5, 0.9); }
     brain.idle = 0;
   } else if (brain.purrUntil && now > brain.purrUntil) { audio.purr(false); brain.purrUntil = 0; }
 
-  // --- сглаживание ---
+  // --- smooth towards the target ---
   for (const k in T) {
     if (k === 'rootY' && brain.jump) { P[k] = T[k]; continue; }
     P[k] = damp(P[k], T[k], rate, dt);
   }
 
-  // --- ходьба (аддитивно) ---
+  // --- walk cycle (additive) ---
   const Q = { ...P };
   const ws = brain.walkSpeed;
   if (ws > 0.01) {
@@ -521,32 +531,32 @@ function update(dt) {
     Q.tailWave = Math.max(Q.tailWave, 0.2 * ws);
   }
 
-  // --- дыхание ---
+  // --- breathing ---
   const br = Math.sin(elapsed * (poseName === 'sleep' ? 1.6 : 2.4));
   cat.breath = br * 0.018;
   if (poseName === 'back' && !a) Q.roll += Math.sin(elapsed * 0.9) * 0.12;
   if (brain.petting || (brain.purrUntil && now < brain.purrUntil)) Q.torsoY += Math.sin(elapsed * 160) * 0.002;
 
-  // --- моргание ---
+  // --- blinking ---
   brain.nextBlink -= dt;
   if (brain.nextBlink < 0) { brain.blink = 1; brain.nextBlink = R(2.5, 6.5); if (Math.random() < 0.2) brain.nextBlink = 0.25; }
   brain.blink = Math.max(0, brain.blink - dt * 7);
   const bl = brain.blink > 0 ? Math.sin(brain.blink * Math.PI) : 0;
   Q.lidUp = Math.max(Q.lidUp, bl); Q.lidLow = Math.max(Q.lidLow, bl * 0.6);
 
-  // --- взгляд ---
+  // --- gaze ---
   lookLogic(Q, dt);
 
-  // корень
+  // root transform
   cat.root.position.set(brain.pos.x, 0, brain.pos.z);
   cat.root.rotation.y = brain.yaw;
   cat.apply(Q, elapsed);
   updateContact();
 
-  // засыпание: Zzz
+  // sleeping: Zzz
   if (poseName === 'sleep') {
     brain.zzz = (brain.zzz || 0) - dt;
-    if (brain.zzz < 0) { emote('Z z z', 'zzz'); brain.zzz = 2.6; }
+    if (brain.zzz < 0) { emote(t('e.zzz'), 'zzz'); brain.zzz = 2.6; }
   }
 
   autonomy(dt);
@@ -569,12 +579,11 @@ function lookLogic(Q, dt) {
   if (target && w > 0) {
     cat.head.getWorldPosition(tmp2);
     const d = tmp.copy(target).sub(tmp2);
-    // в системе координат кошки
+    // in the cat's local frame
     const c = Math.cos(-brain.yaw), s = Math.sin(-brain.yaw);
     const lx = d.x * c + d.z * s, lz = -d.x * s + d.z * c;
     yaw = Math.atan2(lx, lz);
     pitch = Math.atan2(d.y, Math.hypot(lx, lz));
-    if (Math.abs(yaw) > 2.0) yaw = Math.sign(yaw) * 2.0; // не выворачивать шею
     yaw = THREE.MathUtils.clamp(yaw, -1.25, 1.25);
     pitch = THREE.MathUtils.clamp(pitch, -0.9, 0.7);
   }
@@ -582,7 +591,7 @@ function lookLogic(Q, dt) {
   L.pitch = damp(L.pitch, pitch * w, 4, dt);
   Q.headYaw += L.yaw * 0.55; Q.neckYaw += L.yaw * 0.4;
   Q.headPitch -= L.pitch * 0.55; Q.neckPitch -= L.pitch * 0.35;
-  // поворот туловища, если смотрит далеко вбок
+  // turn the chest a bit when looking far to the side
   Q.chestYaw += L.yaw * 0.12;
   for (const e of cat.eyes) {
     e.rotation.y = THREE.MathUtils.clamp(L.yaw * 0.3, -0.3, 0.3);
@@ -612,10 +621,10 @@ function laserLogic(dt) {
   const diff = angDiff(brain.yaw, want);
   if (dist > 4.6) { brain.walkTarget = dot.clone(); brain.crouch = 0; brain.laserState = 'watch'; return; }
   brain.walkTarget = null;
-  // повернуться к точке
+  // turn towards the dot
   brain.yaw += THREE.MathUtils.clamp(diff, -2.2 * dt, 2.2 * dt);
   if (Math.abs(diff) > 0.4) { brain.walkSpeed = Math.max(brain.walkSpeed, 0.3); return; }
-  // присесть и вилять попой
+  // crouch and wiggle the butt
   brain.crouch = Math.min(1, (brain.crouch || 0) + dt * 2);
   const c = brain.crouch;
   T.torsoY -= 0.55 * c; T.pitch += 0.08 * c;
@@ -668,10 +677,7 @@ function loop() {
   requestAnimationFrame(loop);
 }
 updateUI();
-if (params.has('cam')) { const c = params.get('cam').split(',').map(Number); camera.position.set(c[0], c[1], c[2]); }
-if (params.has('tgt')) { const c = params.get('tgt').split(',').map(Number); controls.target.set(c[0], c[1], c[2]); }
-if (params.has('nolife')) { brain.life = false; $('#life').checked = false; }
 loop();
 $('#loading')?.remove();
 
-window.app = { cat, P, brain, setPose, ACTIONS, camera, controls, POSES };
+if (DEBUG) window.app = { cat, P, brain, setPose, ACTIONS, camera, controls, renderer, scene, POSES };

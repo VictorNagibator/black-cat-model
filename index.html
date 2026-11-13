@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Чёрная кошка</title>
+<title>Black cat</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&display=swap" rel="stylesheet">
 <style>
@@ -83,62 +83,62 @@
 </head>
 <body>
 <div id="stage"></div>
-<div id="loading">Кошка просыпается…</div>
+<div id="loading" data-i18n="loading">The cat is waking up…</div>
 <div id="emotes"></div>
 
-<button id="panelToggle" title="Скрыть/показать панель">☰</button>
+<button id="panelToggle" data-i18n-title="togglePanel" title="Show / hide panel">☰</button>
 <aside class="panel">
-  <h1>🐈‍⬛ <span id="catName" contenteditable="true" spellcheck="false">Кошка</span></h1>
-  <div class="sub">Чёрная вислоушка. Имя можно поменять — просто нажми на него.</div>
+  <h1>🐈‍⬛ <span id="catName" contenteditable="true" spellcheck="false">Chernushka</span></h1>
+  <div class="sub" data-i18n="subtitle"></div>
 
-  <h2>Позы</h2>
+  <h2 data-i18n="poses"></h2>
   <div class="grid">
-    <button data-pose="stand"><span class="e">🐾</span>Стоять</button>
-    <button data-pose="sit"><span class="e">🪑</span>Сесть</button>
-    <button data-pose="loaf"><span class="e">🍞</span>Буханочка</button>
-    <button data-pose="sphinx"><span class="e">🦁</span>Сфинкс</button>
-    <button data-pose="side"><span class="e">🛋️</span>Лечь на бок</button>
-    <button data-pose="sleep"><span class="e">😴</span>Спать</button>
-    <button data-pose="back" class="wide"><span class="e">🙃</span>Пузиком кверху</button>
+    <button data-pose="stand"><span class="e">🐾</span><span data-i18n="pose.stand"></span></button>
+    <button data-pose="sit"><span class="e">🪑</span><span data-i18n="pose.sit"></span></button>
+    <button data-pose="loaf"><span class="e">🍞</span><span data-i18n="pose.loaf"></span></button>
+    <button data-pose="sphinx"><span class="e">🦁</span><span data-i18n="pose.sphinx"></span></button>
+    <button data-pose="side"><span class="e">🛋️</span><span data-i18n="pose.side"></span></button>
+    <button data-pose="sleep"><span class="e">😴</span><span data-i18n="pose.sleep"></span></button>
+    <button data-pose="back" class="wide"><span class="e">🙃</span><span data-i18n="pose.back"></span></button>
   </div>
 
-  <h2>Действия</h2>
+  <h2 data-i18n="actions"></h2>
   <div class="grid">
-    <button data-act="sniff"><span class="e">🧦</span>Понюхать носок</button>
-    <button data-act="yawn"><span class="e">🥱</span>Зевнуть</button>
-    <button data-act="meow"><span class="e">💬</span>Мяукнуть</button>
-    <button data-act="blep"><span class="e">👅</span>Блеп</button>
-    <button data-act="wash"><span class="e">🧼</span>Умыться</button>
-    <button data-act="stretch"><span class="e">🧘</span>Потянуться</button>
+    <button data-act="sniff"><span class="e">🧦</span><span data-i18n="act.sniff"></span></button>
+    <button data-act="yawn"><span class="e">🥱</span><span data-i18n="act.yawn"></span></button>
+    <button data-act="meow"><span class="e">💬</span><span data-i18n="act.meow"></span></button>
+    <button data-act="blep"><span class="e">👅</span><span data-i18n="act.blep"></span></button>
+    <button data-act="wash"><span class="e">🧼</span><span data-i18n="act.wash"></span></button>
+    <button data-act="stretch"><span class="e">🧘</span><span data-i18n="act.stretch"></span></button>
   </div>
 
-  <h2>Игры</h2>
+  <h2 data-i18n="games"></h2>
   <div class="grid">
-    <button id="laser"><span class="e">🔴</span>Лазер</button>
-    <button id="toy"><span class="e">🐭</span>Кинуть мышку</button>
+    <button id="laser"><span class="e">🔴</span><span data-i18n="laser"></span></button>
+    <button id="toy"><span class="e">🐭</span><span data-i18n="toy"></span></button>
   </div>
 
-  <h2>Настройки</h2>
+  <h2 data-i18n="settings"></h2>
   <div class="opts">
-    <label>Ошейник
-      <select id="collar">
-        <option value="#e8679f">розовый</option>
-        <option value="#5fcf6a">зелёный</option>
-        <option value="none">без ошейника</option>
+    <label><span data-i18n="language"></span>
+      <select id="lang">
+        <option value="en">English</option>
+        <option value="ru">Русский</option>
       </select>
     </label>
-    <label><input type="checkbox" id="life" checked> Живёт своей жизнью</label>
-    <label><input type="checkbox" id="mute" checked> Звук</label>
-    <label><input type="checkbox" id="fur" checked> Пушистый мех</label>
+    <label><span data-i18n="collar"></span>
+      <select id="collar">
+        <option value="#e8679f" data-i18n="collar.pink"></option>
+        <option value="#5fcf6a" data-i18n="collar.green"></option>
+        <option value="none" data-i18n="collar.none"></option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="life" checked> <span data-i18n="life"></span></label>
+    <label><input type="checkbox" id="mute" checked> <span data-i18n="sound"></span></label>
+    <label><input type="checkbox" id="fur" checked> <span data-i18n="fur"></span></label>
   </div>
 
-  <div class="hint">
-    <b>Погладь</b> — зажми кнопку мыши на голове или спинке и води.<br>
-    <b>Нос</b> — клик = буп. <b>Хвост</b> — лучше не трогать.<br>
-    Когда лежит <b>пузиком кверху</b> — попробуй почесать живот…<br>
-    <b>Лазер</b> — води мышкой по коврику, замри — и она прыгнет.<br>
-    Крутить камеру — тяни за пустое место, колесо — зум.
-  </div>
+  <div class="hint" data-i18n-html="hint"></div>
 </aside>
 
 <script type="module" src="./src/main.js"></script>
