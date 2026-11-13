@@ -75,6 +75,32 @@ floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
 // ---------- Кошка ----------
 const cat = new Cat();
 scene.add(cat.root);
+
+// мягкая контактная тень под кошкой (заземляет её на коврике)
+const contact = (() => {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    uniforms: { uOpacity: { value: 0.6 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: 'uniform float uOpacity; varying vec2 vUv; void main(){ float d = length(vUv - 0.5) * 2.0; float a = 1.0 - smoothstep(0.15, 1.0, d); gl_FragColor = vec4(0.09, 0.06, 0.04, a * uOpacity); }',
+  }));
+  m.rotation.x = -Math.PI / 2; m.renderOrder = 1;
+  scene.add(m);
+  return m;
+})();
+const _cp = new THREE.Vector3(), _cc = new THREE.Vector3(), _ch = new THREE.Vector3();
+function updateContact() {
+  cat.pelvis.getWorldPosition(_cp); cat.chest.getWorldPosition(_cc); cat.head.getWorldPosition(_ch);
+  const cx = (_cp.x + _cc.x * 2 + _ch.x) / 4, cz = (_cp.z + _cc.z * 2 + _ch.z) / 4;
+  const dx = _ch.x - _cp.x, dz = _ch.z - _cp.z;
+  const len = Math.hypot(dx, dz) + 1.6;
+  const lying = Math.min(1, Math.abs(P.roll) / 1.4);
+  const lift = Math.max(0, P.rootY);
+  contact.position.set(cx, 0.13, cz);
+  contact.rotation.z = Math.atan2(dx, dz);
+  contact.scale.set((2.4 + lying * 1.2) * (1 + lift * 0.3), len * 1.35, 1);
+  contact.material.uniforms.uOpacity.value = 0.7 * Math.max(0, 1 - lift * 0.8);
+}
 const P = poseOf(params.get('pose') || 'stand');
 let poseName = params.get('pose') || 'stand';
 const audio = new CatAudio();
@@ -515,6 +541,7 @@ function update(dt) {
   cat.root.position.set(brain.pos.x, 0, brain.pos.z);
   cat.root.rotation.y = brain.yaw;
   cat.apply(Q, elapsed);
+  updateContact();
 
   // засыпание: Zzz
   if (poseName === 'sleep') {
