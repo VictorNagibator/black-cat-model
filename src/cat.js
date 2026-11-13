@@ -224,16 +224,14 @@ export class Cat {
     this.pelvis = G(); this.torso.add(this.pelvis);
     // грудь (группа нужна до построения туловища)
     this.chest = G(); this.chest.position.set(0, 0.05, 0.8); this.torso.add(this.chest);
-    // туловище — одна гладкая «гибкая» оболочка вдоль позвоночника
-    this.buildBody();
     // маленькое светлое пятнышко на животе (как на фото)
     const spot = new THREE.Mesh(ellipsoid(0.07, 0.03, 0.09, 12), new THREE.MeshStandardMaterial({ color: 0x8a8582, roughness: 0.9 }));
     spot.position.set(0.05, -0.47, 0.55); this.torso.add(spot);
     // грудь
 
     // шея
-    this.neck = G(); this.neck.position.set(0, 0.32, 0.85); this.chest.add(this.neck);
-    this.addPart(this.neck, ellipsoid(0.4, 0.45, 0.48), [0, 0.02, 0.1], 'body', this.fur, { dir: [0, -0.6, -1], k: 1.7 });
+    // шея — часть общего туловища-лофта (см. updateBody), здесь только сустав
+    this.neck = G(); this.neck.position.set(0, 0.22, 0.95); this.chest.add(this.neck);
     // ошейник
     this.collar = new THREE.Group();
     const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.5 });
@@ -247,7 +245,7 @@ export class Cat {
     this.neck.add(this.collar);
 
     // голова
-    this.head = G(); this.head.position.set(0, 0.36, 0.36); this.neck.add(this.head);
+    this.head = G(); this.head.position.set(0, 0.34, 0.38); this.neck.add(this.head);
     const H = this.head;
     this.addPart(H, ellipsoid(0.66, 0.55, 0.56, 36), [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9 });
     // щёки (у вислоухих круглое широкое лицо)
@@ -397,6 +395,8 @@ export class Cat {
     }
     this.tailSegL = segL;
     this.buildTail();
+    // туловище с шеей — одна гладкая «гибкая» оболочка вдоль позвоночника
+    this.buildBody();
   }
 
   // ---------- хвост: одна гладкая трубка по суставам ----------
@@ -460,7 +460,7 @@ export class Cat {
 
   // ---------- туловище-лофт ----------
   buildBody() {
-    const NR = 34, NA = 30;
+    const NR = 46, NA = 30;
     this.bodyN = [NR, NA];
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array((NR + 1) * (NA + 1) * 3), 3));
@@ -472,7 +472,7 @@ export class Cat {
     g.setIndex(idx);
     this.bodyGeo = g;
     this._v = { c: new THREE.Vector3(), t: new THREE.Vector3(), u: new THREE.Vector3(), x: new THREE.Vector3(), up: new THREE.Vector3(), uc: new THREE.Vector3() };
-    this._curve = new THREE.CatmullRomCurve3([0, 0, 0, 0, 0].map(() => new THREE.Vector3()), false, 'centripetal');
+    this._curve = new THREE.CatmullRomCurve3([0, 0, 0, 0, 0, 0, 0].map(() => new THREE.Vector3()), false, 'centripetal');
     this.breath = 0;
     this.updateBody();
     g.setAttribute('furP', g.attributes.position.clone());
@@ -480,8 +480,10 @@ export class Cat {
     { const pos = g.attributes.position, k = new Float32Array(pos.count), d = new Float32Array(pos.count * 3);
       for (let i = 0; i <= NR; i++) for (let j = 0; j <= NA; j++) {
         const id = i * (NA + 1) + j, s = i / NR, sa = Math.sin((j / NA) * Math.PI * 2);
-        k[id] = 1 + 0.9 * THREE.MathUtils.smoothstep(s, 0.7, 0.95) * THREE.MathUtils.clamp(0.3 - sa, 0, 1);
-        d.set([0, -0.25 * Math.max(0, -sa), -1], id * 3);
+        const chestF = THREE.MathUtils.smoothstep(s, 0.48, 0.7) * (1 - THREE.MathUtils.smoothstep(s, 0.78, 0.9)) * THREE.MathUtils.clamp(0.3 - sa, 0, 1);
+        const ruff = THREE.MathUtils.smoothstep(s, 0.7, 0.85) * (1 - THREE.MathUtils.smoothstep(s, 0.93, 1));
+        k[id] = 1 + 0.9 * chestF + 0.6 * ruff;
+        d.set([0, -0.25 * Math.max(0, -sa) - 0.4 * ruff, -1], id * 3);
       }
       g.setAttribute('furK', new THREE.BufferAttribute(k, 1));
       g.setAttribute('furDir', new THREE.BufferAttribute(d, 3)); }
@@ -491,17 +493,22 @@ export class Cat {
   updateBody() {
     const [NR, NA] = this.bodyN;
     const pel = this.pelvis, ch = this.chest, V = this._v;
-    pel.updateMatrix(); ch.updateMatrix();
+    pel.updateMatrix(); ch.updateMatrix(); this.neck.updateMatrix(); this.head.updateMatrix();
+    const mN = (this._mN ||= new THREE.Matrix4()).multiplyMatrices(ch.matrix, this.neck.matrix);
+    const mH = (this._mH ||= new THREE.Matrix4()).multiplyMatrices(mN, this.head.matrix);
     const P = this._curve.points;
     P[0].set(0, 0.13, -0.74).applyMatrix4(pel.matrix);
     P[1].set(0, 0.11, -0.2).applyMatrix4(pel.matrix);
     P[2].set(0, 0.09, 0.42);
     P[3].set(0, 0.05, 0.4).applyMatrix4(ch.matrix);
-    P[4].set(0, 0.13, 1.0).applyMatrix4(ch.matrix);
+    P[4].set(0, 0.1, 0.85).applyMatrix4(ch.matrix);
+    P[5].set(0, 0.0, 0.12).applyMatrix4(mN);
+    P[6].set(0, -0.16, -0.1).applyMatrix4(mH);
     V.up.set(0, 1, 0).applyQuaternion(pel.quaternion);
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
+    (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
     // профиль: s, полуширина, полувысота, смещение вниз
-    const PR = [[0, 0.46, 0.5, 0], [0.2, 0.53, 0.56, 0], [0.45, 0.45, 0.53, -0.03], [0.68, 0.46, 0.56, 0], [0.88, 0.42, 0.5, 0.02], [1, 0.38, 0.44, 0.02]];
+    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.33, 0.45, 0.53, -0.03], [0.5, 0.46, 0.56, 0], [0.66, 0.41, 0.49, 0], [0.83, 0.31, 0.35, 0], [1, 0.27, 0.3, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
         const t = (s - PR[i - 1][0]) / (PR[i][0] - PR[i - 1][0]);
@@ -516,15 +523,15 @@ export class Cat {
       const s = i / NR;
       this._curve.getPoint(s, V.c);
       this._curve.getTangent(s, V.t);
-      const w = THREE.MathUtils.smoothstep(s, 0.3, 0.7);
-      V.u.copy(V.up).lerp(V.uc, w).normalize();
+      const w = THREE.MathUtils.smoothstep(s, 0.2, 0.5);
+      V.u.copy(V.up).lerp(V.uc, w).lerp(V.un, THREE.MathUtils.smoothstep(s, 0.68, 0.9)).normalize();
       V.x.crossVectors(V.u, V.t).normalize();
       V.u.crossVectors(V.t, V.x);
       let k = 1;
-      const e0 = 0.17, e1 = 0.13;
+      const e0 = 0.12, e1 = 0.05;
       if (s < e0) k = Math.sqrt(Math.max(0, 1 - ((e0 - s) / e0) ** 2));
       else if (s > 1 - e1) k = Math.sqrt(Math.max(0, 1 - ((s - 1 + e1) / e1) ** 2));
-      k *= 1 + this.breath * Math.exp(-((s - 0.62) ** 2) / 0.03);
+      k *= 1 + this.breath * Math.exp(-((s - 0.45) ** 2) / 0.02);
       const rx = prof(s, 1) * k, ry = prof(s, 2) * k, off = prof(s, 3);
       for (let j = 0; j <= NA; j++) {
         const a = (j / NA) * Math.PI * 2;
@@ -575,9 +582,9 @@ export class Cat {
     this.torso.rotation.set(P.pitch, 0, P.roll);
     this.pelvis.rotation.set(P.pelvisBend, 0, P.pelvisRoll);
     this.chest.rotation.set(P.chestBend, P.chestYaw, P.chestRoll);
-    this.updateBody();
     this.neck.rotation.set(P.neckPitch, P.neckYaw, P.neckRoll, 'YXZ');
     this.head.rotation.set(P.headPitch, P.headYaw, P.headRoll, 'YXZ');
+    this.updateBody();
     this.jaw.rotation.x = P.jaw * 1.0;
     this.tongue.position.z = 0.06 + P.tongue * 0.34;
     this.tongue.position.y = -0.05 + P.tongue * 0.035;
