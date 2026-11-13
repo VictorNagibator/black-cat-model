@@ -2,26 +2,28 @@
 import * as THREE from 'three';
 
 // ---------- Мех (shell fur) ----------
-const FUR_SHELLS = 7;
+const FUR_SHELLS = 8;
 
 function furMaterial({ color, sheen, h = 0, den = 70, len = 0.03 }) {
   const m = new THREE.MeshPhysicalMaterial({
     color,
-    roughness: 0.62,
+    roughness: 0.72,
     metalness: 0,
     sheen: 1,
     sheenColor: new THREE.Color(sheen),
-    sheenRoughness: 0.45,
-    clearcoat: h === 0 ? 0.08 : 0,
-    clearcoatRoughness: 0.5,
+    sheenRoughness: 0.4,
   });
   const u = { uFurOff: { value: h * len }, uFurH: { value: h }, uFurDen: { value: den } };
   m.userData.u = u;
   m.onBeforeCompile = (s) => {
     Object.assign(s.uniforms, m.userData.u);
-    s.vertexShader = 'attribute vec3 furP;\nuniform float uFurOff;\nvarying vec3 vFurP;\n' + s.vertexShader.replace(
+    s.vertexShader = 'attribute vec3 furP; attribute vec3 furDir; attribute float furK;\nuniform float uFurOff; uniform float uFurH;\nvarying vec3 vFurP;\n' + s.vertexShader.replace(
       '#include <begin_vertex>',
-      '#include <begin_vertex>\n vFurP = furP;\n transformed += normal * uFurOff;'
+      `#include <begin_vertex>
+       vFurP = furP;
+       // ворсинки «причёсаны» вдоль furDir и сильнее гнутся к кончику
+       vec3 comb = furDir - normal * dot(furDir, normal);
+       transformed += (normal + comb * uFurH * 1.4) * uFurOff * furK;`
     );
     s.fragmentShader = `uniform float uFurH; uniform float uFurDen; varying vec3 vFurP;
 float furHash(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
@@ -30,13 +32,15 @@ float furHash(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*
       `#include <color_fragment>
       {
         vec3 q = vFurP * uFurDen;
-        vec3 c = floor(q); vec3 f = fract(q) - 0.5;
+        vec3 c = floor(q);
         float hh = furHash(c);
+        vec3 jit = vec3(furHash(c + 17.1), furHash(c + 31.7), furHash(c + 5.3)) - 0.5;
+        vec3 f = fract(q) - 0.5 - jit * 0.4;
         if (uFurH > 0.0) {
-          float rad = 0.55 * (1.0 - uFurH * 0.85);
-          if (uFurH > 0.45 + 0.55 * hh || length(f) > rad) discard;
+          float rad = 0.62 * pow(1.0 - uFurH, 0.6);
+          if (uFurH > 0.35 + 0.65 * hh || length(f) > rad) discard;
         }
-        diffuseColor.rgb *= mix(0.55, 1.1, uFurH) * (0.85 + 0.3 * hh);
+        diffuseColor.rgb *= mix(0.5, 1.15, uFurH) * (0.85 + 0.3 * hh);
       }`
     );
   };
@@ -168,9 +172,9 @@ export class Cat {
     this.root = new THREE.Group();
     this.parts = []; // меши для рейкаста
     this.shellMeshes = [];
-    this.fur = furSet(0x060505, 0x3a312c, 80, 0.028);
-    this.furMuzzle = furSet(0x151312, 0x6f6a64, 95, 0.02);
-    this.furChin = furSet(0x24170f, 0x8a6550, 95, 0.02);
+    this.fur = furSet(0x060505, 0x3a312c, 130, 0.034);
+    this.furMuzzle = furSet(0x151312, 0x6f6a64, 150, 0.022);
+    this.furChin = furSet(0x24170f, 0x8a6550, 150, 0.024);
     this.matPad = new THREE.MeshStandardMaterial({ color: 0x5a4549, roughness: 0.55 });
     this.matNose = new THREE.MeshPhysicalMaterial({ color: 0x2b2627, roughness: 0.45, clearcoat: 0.5, clearcoatRoughness: 0.35 });
     this.matMouth = new THREE.MeshStandardMaterial({ color: 0x5e2630, roughness: 0.6 });
@@ -189,6 +193,14 @@ export class Cat {
     m.castShadow = true; m.receiveShadow = true;
     m.userData.part = part;
     if (!geo.attributes.furP) geo.setAttribute('furP', geo.attributes.position.clone());
+    const n = geo.attributes.position.count;
+    if (!geo.attributes.furDir) {
+      const d = new THREE.Vector3(...(opts.dir || [0, 0, -1])).normalize();
+      const a = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) a.set([d.x, d.y, d.z], i * 3);
+      geo.setAttribute('furDir', new THREE.BufferAttribute(a, 3));
+    }
+    if (!geo.attributes.furK) geo.setAttribute('furK', new THREE.BufferAttribute(new Float32Array(n).fill(opts.k ?? 1), 1));
     parent.add(m);
     this.parts.push(m);
     if (set.shells && opts.fur !== false) {
@@ -221,7 +233,7 @@ export class Cat {
 
     // шея
     this.neck = G(); this.neck.position.set(0, 0.32, 0.85); this.chest.add(this.neck);
-    this.addPart(this.neck, ellipsoid(0.4, 0.45, 0.48), [0, 0.02, 0.1], 'body');
+    this.addPart(this.neck, ellipsoid(0.4, 0.45, 0.48), [0, 0.02, 0.1], 'body', this.fur, { dir: [0, -0.6, -1], k: 1.7 });
     // ошейник
     this.collar = new THREE.Group();
     const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.5 });
@@ -237,15 +249,15 @@ export class Cat {
     // голова
     this.head = G(); this.head.position.set(0, 0.36, 0.36); this.neck.add(this.head);
     const H = this.head;
-    this.addPart(H, ellipsoid(0.66, 0.55, 0.56, 36), [0, 0, 0], 'head');
+    this.addPart(H, ellipsoid(0.66, 0.55, 0.56, 36), [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9 });
     // щёки (у вислоухих круглое широкое лицо)
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head');
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head');
+    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.9 });
+    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.9 });
     // широкая переносица от глаз к носу
-    this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur);
+    this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur, { dir: [0, 1, -0.3], k: 0.5 });
     // подушечки усов
-    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [0.08, -0.2, 0.455], 'nose', this.furMuzzle);
-    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [-0.08, -0.2, 0.455], 'nose', this.furMuzzle);
+    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [1, -0.3, 0], k: 0.6 });
+    this.addPart(H, ellipsoid(0.105, 0.08, 0.08), [-0.08, -0.2, 0.455], 'nose', this.furMuzzle, { dir: [-1, -0.3, 0], k: 0.6 });
     // нос — тёмно-серый треугольник
     const ng = ellipsoid(0.07, 0.042, 0.03, 20);
     { const p = ng.attributes.position;
@@ -274,7 +286,7 @@ export class Cat {
     }
     // челюсть с рыжеватым подбородком (как на фото)
     this.jaw = G(); this.jaw.position.set(0, -0.21, 0.285); H.add(this.jaw);
-    this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin);
+    this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.8 });
     this.tongue = G(); this.tongue.position.set(0, -0.05, 0.06); this.jaw.add(this.tongue);
     const tg = ellipsoid(0.065, 0.02, 0.13, 16);
     this.tongueMesh = new THREE.Mesh(tg, this.matTongue); this.tongue.add(this.tongueMesh);
@@ -300,10 +312,10 @@ export class Cat {
     for (const s of [1, -1]) {
       const eg = G(); eg.position.set(0.36 * s, 0.37, 0.02); H.add(eg);
       const bg = new THREE.CylinderGeometry(0.12, 0.18, 0.09, 18); bg.scale(1, 1, 0.5); bg.translate(0, 0.045, 0);
-      this.addPart(eg, bg, [0, 0, 0], 'head');
+      this.addPart(eg, bg, [0, 0, 0], 'head', this.fur, { dir: [0, 1, 0], k: 0.6 });
       const fold = G(); fold.position.set(0, 0.085, 0.03); eg.add(fold);
       const tgeo = new THREE.ConeGeometry(0.13, 0.17, 18); tgeo.scale(1, 1, 0.35); tgeo.translate(0, 0.085, 0);
-      this.addPart(fold, tgeo, [0, 0, 0], 'head');
+      this.addPart(fold, tgeo, [0, 0, 0], 'head', this.fur, { dir: [0, 1, 0], k: 0.5 });
       this.ears.push({ g: eg, fold, s });
     }
 
@@ -344,13 +356,13 @@ export class Cat {
     this.fl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const sh = G(); sh.position.set(0.28 * s, -0.22, 0.6); this.chest.add(sh);
-      this.addPart(sh, ellipsoid(0.18, 0.32, 0.23), [-0.02 * s, -0.05, 0], 'body');
-      this.addPart(sh, capsuleDown(0.14, 0.56, 0.115), [0, 0, 0], 'paw');
+      this.addPart(sh, ellipsoid(0.18, 0.32, 0.23), [-0.02 * s, -0.05, 0], 'body', this.fur, { dir: [0, -1, -0.3] });
+      this.addPart(sh, capsuleDown(0.14, 0.56, 0.115), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
       const el = G(); el.position.set(0, -0.68, 0); sh.add(el);
-      this.addPart(el, capsuleDown(0.11, 0.6, 0.095), [0, 0, 0], 'paw');
+      this.addPart(el, capsuleDown(0.11, 0.6, 0.095), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
       const wr = G(); wr.position.set(0, -0.68, 0); el.add(wr);
       const paw = G(); wr.add(paw);
-      this.addPart(paw, ellipsoid(0.13, 0.105, 0.17), [0, -0.01, 0.06], 'paw');
+      this.addPart(paw, ellipsoid(0.13, 0.105, 0.17), [0, -0.01, 0.06], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
       this.addPads(paw, 0.13);
       this.addToes(paw, 0.13, 0.17);
       this.fl[side] = { sh, el, wr, paw, s };
@@ -359,14 +371,14 @@ export class Cat {
     this.bl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const hp = G(); hp.position.set(0.3 * s, -0.05, -0.1); this.pelvis.add(hp);
-      this.addPart(hp, ellipsoid(0.27, 0.44, 0.42), [0.01 * s, -0.15, 0.03], 'body');
-      this.addPart(hp, capsuleDown(0.17, 0.5, 0.12), [0, 0, 0], 'paw');
+      this.addPart(hp, ellipsoid(0.27, 0.44, 0.42), [0.01 * s, -0.15, 0.03], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.2 });
+      this.addPart(hp, capsuleDown(0.17, 0.5, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0] });
       const kn = G(); kn.position.set(0, -0.62, 0); hp.add(kn);
-      this.addPart(kn, capsuleDown(0.11, 0.58, 0.085), [0, 0, 0], 'paw');
+      this.addPart(kn, capsuleDown(0.11, 0.58, 0.085), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
       const hk = G(); hk.position.set(0, -0.68, 0); kn.add(hk);
-      this.addPart(hk, capsuleDown(0.085, 0.36, 0.08), [0, 0, 0], 'paw');
+      this.addPart(hk, capsuleDown(0.085, 0.36, 0.08), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
       const ft = G(); ft.position.set(0, -0.46, 0); hk.add(ft);
-      this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw');
+      this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
       this.addPads(ft, 0.12);
       this.addToes(ft, 0.12, 0.18);
       this.bl[side] = { hp, kn, hk, ft, s };
@@ -384,7 +396,7 @@ export class Cat {
       const r1 = THREE.MathUtils.lerp(0.13, 0.065, (i + 1) / N);
       const geo = capsuleDown(r0, segL, r1);
       geo.rotateX(Math.PI / 2); // вдоль -z
-      this.addPart(g, geo, [0, 0, 0], 'tail');
+      this.addPart(g, geo, [0, 0, 0], 'tail', this.fur, { dir: [0, 0, -1], k: 1.3 });
       this.tail.push(g);
       parent = g;
     }
@@ -408,6 +420,15 @@ export class Cat {
     this.breath = 0;
     this.updateBody();
     g.setAttribute('furP', g.attributes.position.clone());
+    // пушистая грудка: ворс длиннее спереди-снизу
+    { const pos = g.attributes.position, k = new Float32Array(pos.count), d = new Float32Array(pos.count * 3);
+      for (let i = 0; i <= NR; i++) for (let j = 0; j <= NA; j++) {
+        const id = i * (NA + 1) + j, s = i / NR, sa = Math.sin((j / NA) * Math.PI * 2);
+        k[id] = 1 + 0.9 * THREE.MathUtils.smoothstep(s, 0.7, 0.95) * THREE.MathUtils.clamp(0.3 - sa, 0, 1);
+        d.set([0, -0.25 * Math.max(0, -sa), -1], id * 3);
+      }
+      g.setAttribute('furK', new THREE.BufferAttribute(k, 1));
+      g.setAttribute('furDir', new THREE.BufferAttribute(d, 3)); }
     this.bodyMesh = this.addPart(this.torso, g, [0, 0, 0], 'body');
   }
 
