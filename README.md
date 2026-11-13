@@ -1,4 +1,4 @@
-# Black cat 🐈‍⬛
+# Black cat
 
 An interactive 3D model of my black Scottish Fold cat, Chernushka, that runs in the browser.
 Everything is built procedurally with [Three.js](https://threejs.org/): no external models, no build step.
@@ -26,11 +26,6 @@ npm start
 
 Then open http://localhost:5188. Any other static file server works too.
 
-## Publish on GitHub Pages
-
-The repository is plain static files, so it can be served directly:
-**Settings → Pages → Deploy from a branch → `main` / `(root)`**.
-The site will appear at `https://<your-login>.github.io/black-cat-model/`.
 
 ## Project structure
 
