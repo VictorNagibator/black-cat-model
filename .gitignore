@@ -1,8 +1,8 @@
-# личные фото/видео-референсы — не заливаем
+# personal reference photos/videos stay local
 data/
-# локальные настройки редактора/Claude
+# local editor / assistant settings
 .claude/
-# системное
+# OS and tooling files
 Thumbs.db
 .DS_Store
 node_modules/
