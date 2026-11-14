@@ -5,6 +5,7 @@ import { Cat, BASE } from './cat.js';
 import { POSES, poseOf, both } from './poses.js';
 import { CatAudio } from './audio.js';
 import { Legs } from './legs.js';
+import { makeSock } from './props.js';
 import { t, getLang, setLang, applyI18n, store } from './i18n.js';
 
 const $ = (s) => document.querySelector(s);
@@ -111,18 +112,6 @@ let poseName = 'stand';
 const audio = new CatAudio();
 
 // ---------- Props ----------
-function makeSock() {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x8d8f96, roughness: 1 });
-  const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.7, 6, 14), mat);
-  leg.rotation.z = Math.PI / 2; leg.scale.set(1, 1, 0.55); g.add(leg);
-  const foot = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.5, 6, 14), mat);
-  foot.scale.set(1, 1, 0.55); foot.position.set(0.6, 0, 0.35); foot.rotation.x = Math.PI / 2; g.add(foot);
-  const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.05, 8, 20), new THREE.MeshStandardMaterial({ color: 0x6d6f75, roughness: 1 }));
-  cuff.rotation.y = Math.PI / 2; cuff.position.x = -0.6; cuff.scale.set(1, 1, 0.6); g.add(cuff);
-  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return g;
-}
 function makeMouse() {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: 0xf08bb0, roughness: 0.9 });
@@ -264,18 +253,22 @@ const ACTIONS = {
     { d: 4.0, set: { tongue: 0.34, lidUp: 0.3 }, emote: 'e.blep' },
     { d: 0.4, set: { tongue: 0 } },
   ]),
+  // sniff: a sock appears a few steps away; she walks over, leans down and sniffs it, then
+  // lifts her head with the mouth slightly open and eyes half closed (the flehmen response
+  // cats show when they study a new smell), and finally licks her nose
   sniff: () => {
-    const fw = forward();
-    const at = brain.pos.clone().add(fw.multiplyScalar(poseName === 'sit' ? 2.5 : 3.0)); at.y = 0.15;
+    const a = brain.yaw + R(-0.7, 0.7), r = R(3.8, 4.6);
+    const at = brain.pos.clone().add(new THREE.Vector3(Math.sin(a) * r, 0, Math.cos(a) * r));
+    if (at.length() > 6) at.setLength(6);
+    at.y = 0.12;
     const sock = makeSock(); sock.rotation.y = R(0, Math.PI * 2);
-    play('sniff', needPose(['stand', 'sit'], [
-      { d: 0.8, enter: () => { setProp(sock, at); brain.extraLook = at.clone().setY(0.25); }, set: { pupil: 0.8 }, emote: '?' },
-      { d: 1.4, fn: (t, p) => { p.whisk = 0.6; p.headPitch += Math.sin(t * 38) * 0.03; p.neckPitch += 0.15; }, emote: 'e.sniff' },
-      { d: 0.5, enter: () => { brain.extraLook = null; }, add: { headPitch: -0.3, neckPitch: -0.1 }, set: { jaw: 0.24, lidUp: 0.5, whisk: 0.3, earBack: 0.3 } },
-      { d: 2.2, add: { headPitch: -0.32, neckPitch: -0.1 }, set: { jaw: 0.27, lidUp: 0.6, lidLow: 0.3, whisk: 0.35, earBack: 0.35, pupil: 0.5 }, emote: '😮' },
-      { d: 0.5, set: { jaw: 0, tongue: 0.25, tongueUp: 0.7 } },
-      { d: 0.4, enter: () => setTimeout(() => setProp(null), 2500) },
-    ]));
+    setProp(sock, at);
+    brain.action = null; brain.toyChase = null;
+    brain.sniff = { p: at, sock };
+    brain.extraLook = at.clone().setY(0.25);
+    emote('?', 'big');
+    if (brain.goal !== 'stand') setPose('stand');
+    brain.walkTarget = at.clone();
   },
   // wash: lick the paw held in front of the mouth, then wipe it over the cheek and ear
   // (the paw is driven by IK towards points in head space, so it never goes through the face)
@@ -402,8 +395,9 @@ function stopPet() {
 }
 
 // ---------- UI ----------
-document.querySelectorAll('[data-pose]').forEach((b) => b.addEventListener('click', () => { audio.ensure(); stopLaser(); brain.action = null; brain.walkTarget = null; setPose(b.dataset.pose); }));
-document.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => { audio.ensure(); stopLaser(); if (brain.jump) return; ACTIONS[b.dataset.act](); }));
+document.querySelectorAll('[data-pose]').forEach((b) => b.addEventListener('click', () => { audio.ensure(); stopLaser(); cancelSniff(); brain.action = null; brain.walkTarget = null; setPose(b.dataset.pose); }));
+document.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', () => { audio.ensure(); stopLaser(); if (brain.jump) return; cancelSniff(); ACTIONS[b.dataset.act](); }));
+function cancelSniff() { if (brain.sniff) { brain.sniff = null; brain.extraLook = null; brain.walkTarget = null; } }
 $('#laser').addEventListener('click', () => { audio.ensure(); brain.laser ? stopLaser() : startLaser(); });
 $('#toy').addEventListener('click', () => { audio.ensure(); throwToy(); });
 $('#mute').addEventListener('change', (e) => audio.setMuted(!e.target.checked));
@@ -431,6 +425,7 @@ function updateUI() {
   document.body.classList.toggle('laser-on', brain.laser);
 }
 function startLaser() {
+  cancelSniff();
   brain.laser = true; brain.laserState = 'watch'; brain.action = null;
   if (poseName !== 'stand' && poseName !== 'sit') setPose('stand');
   updateUI(); emote('!!', 'big');
@@ -441,7 +436,7 @@ function stopLaser() {
   updateUI();
 }
 function throwToy() {
-  stopLaser();
+  stopLaser(); cancelSniff();
   const a = R(0, Math.PI * 2), r = R(3, 6.5);
   const p = new THREE.Vector3(Math.cos(a) * r, 0.2, Math.sin(a) * r);
   const toy = makeMouse(); toy.rotation.y = R(0, 6);
@@ -514,6 +509,7 @@ function update(dt) {
       ].map(fixBoth), { onDone: () => { brain.extraLook = null; setTimeout(() => setProp(null), 1500); } });
     }
   }
+  if (brain.sniff && !brain.sniff.started && !brain.walkTarget && poseName === 'stand' && !brain.action) startSniff();
   if (brain.laser) laserLogic(dt);
   if (brain.walkTarget && poseName === 'stand' && !brain.jump) {
     const d = tmp.copy(brain.walkTarget).sub(brain.pos).setY(0);
@@ -521,7 +517,7 @@ function update(dt) {
     const want = Math.atan2(d.x, d.z);
     const diff = angDiff(brain.yaw, want);
     brain.yaw += THREE.MathUtils.clamp(diff, -2.8 * dt, 2.8 * dt);
-    const stopDist = brain.laser ? 2.2 : toy ? 2.4 : 0.3;
+    const stopDist = brain.laser ? 2.2 : toy ? 2.4 : brain.sniff ? 2.75 : 0.3;
     if (dist > stopDist) {
       const sp = (Math.abs(diff) < 0.8 ? 1 : 0.35) * (brain.laser ? 2.6 : 1.9);
       moving = Math.min(1, (dist - stopDist) * 2 + 0.3);
@@ -676,6 +672,27 @@ function groundContact(Q, dt) {
   cat.root.position.y = 0.1 + Q.rootY + cat.groundLift;
 }
 
+const SNIFF_LEAN = (p) => ({ torsoY: p.torsoY - 0.36, pitch: p.pitch + 0.24, fzF: p.fzF + 0.3, neckPitch: p.neckPitch + 1.5, headPitch: p.headPitch + 0.2 });
+function startSniff() {
+  const sn = brain.sniff; sn.started = true;
+  play('sniff', [
+    // lean down towards the sock: front end lowered, neck stretched down, nose to the sock
+    { d: 0.9, set: { pupil: 0.8, whisk: 0.4, look: 0.3 }, fn: (t, p) => { Object.assign(p, SNIFF_LEAN(p)); }, rate: 3.5 },
+    // sniff: quick little nose movements, whiskers forward
+    { d: 1.9, fn: (t, p) => {
+      Object.assign(p, SNIFF_LEAN(p)); p.look = 0.3;
+      p.whisk = 0.65; p.headPitch += Math.sin(t * 34) * 0.03; p.earBack = 0.1;
+    }, emote: 'e.sniff' },
+    // straighten up and lift the head
+    { d: 0.7, enter: () => { brain.extraLook = null; }, set: { jaw: 0.08, whisk: 0.3, look: 0 }, add: { headPitch: -0.22, neckPitch: -0.25 }, rate: 4 },
+    // flehmen: mouth slightly open, eyes half closed, a short pause
+    { d: 2.4, set: { jaw: 0.3, lidUp: 0.6, lidLow: 0.3, whisk: 0.35, earBack: 0.3, pupil: 0.5, look: 0 }, add: { headPitch: -0.3, neckPitch: -0.25 }, emote: '😮', rate: 5 },
+    // close the mouth and lick the nose
+    { d: 0.55, set: { jaw: 0, tongue: 0.25, tongueUp: 0.7 } },
+    { d: 0.3, enter: () => { brain.sniff = null; setTimeout(() => { if (prop === sn.sock) setProp(null); }, 6000); } },
+  ]);
+}
+
 function lookLogic(Q, dt) {
   const L = brain.look;
   let target = null;
@@ -767,7 +784,7 @@ function laserLogic(dt) {
 }
 
 function autonomy(dt) {
-  if (!brain.life || brain.action || brain.petting || brain.laser || brain.walkTarget || brain.toyChase || brain.jump) return;
+  if (!brain.life || brain.action || brain.petting || brain.laser || brain.walkTarget || brain.toyChase || brain.jump || brain.sniff) return;
   if (brain.idle < brain.nextAuto) return;
   brain.idle = 0;
   brain.nextAuto = R(7, 14);
