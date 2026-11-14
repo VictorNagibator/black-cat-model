@@ -665,7 +665,7 @@ function lookLogic(Q, dt) {
   }
   L.yaw = damp(L.yaw, yaw * w, 4, dt);
   L.pitch = damp(L.pitch, pitch * w, 4, dt);
-  Q.headYaw += L.yaw * 0.55; Q.neckYaw += L.yaw * 0.4;
+  Q.lookYaw = L.yaw; // applied around the world vertical in cat.turnHead()
   Q.headPitch -= L.pitch * 0.55; Q.neckPitch -= L.pitch * 0.35;
   // turn the chest a bit when looking far to the side
   Q.chestYaw += L.yaw * 0.12;

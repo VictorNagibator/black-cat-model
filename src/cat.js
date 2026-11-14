@@ -381,7 +381,7 @@ export class Cat {
       this.addPart(sh, ellipsoid(0.19, 0.36, 0.26), [-0.03 * s, -0.17, 0], 'body', this.fur, { dir: [0, -1, -0.3] });
       this.addPart(sh, capsuleDown(0.15, 0.4, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
       const el = G(); el.position.set(0, -0.5, 0); sh.add(el);
-      this.addPart(el, capsuleDown(0.115, 0.9, 0.085), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      this.addPart(el, capsuleDown(0.128, 0.9, 0.088), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
       const wr = G(); wr.position.set(0, -0.98, 0); el.add(wr);
       const paw = G(); wr.add(paw);
       this.addPart(paw, ellipsoid(0.13, 0.11, 0.17), [0, -0.005, 0.06], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
@@ -693,6 +693,7 @@ export class Cat {
     this.chest.rotation.set(P.chestBend, P.chestYaw, P.chestRoll);
     this.neck.rotation.set(P.neckPitch, P.neckYaw, P.neckRoll, 'YXZ');
     this.head.rotation.set(P.headPitch, P.headYaw, P.headRoll, 'YXZ');
+    if (P.lookYaw) this.turnHead(P.lookYaw);
     this.updateBody();
     this.jaw.rotation.x = P.jaw * 1.0;
     { const j = P.jaw; this.mouthFill.visible = j > 0.03;
@@ -715,6 +716,18 @@ export class Cat {
     }
     this.applyLegs(P);
     this.applyTail(P, dt);
+  }
+
+  // Turn the head to look sideways around the *world* vertical axis (split between neck and
+  // head), so looking around never tilts the head even when the body is pitched, e.g. sitting.
+  turnHead(yaw) {
+    const T = this._turn ||= { q: new THREE.Quaternion(), r: new THREE.Quaternion(), a: new THREE.Vector3() };
+    T.q.copy(this.root.quaternion).multiply(this.torso.quaternion).multiply(this.chest.quaternion);
+    for (const [joint, share] of [[this.neck, 0.45], [this.head, 0.55]]) {
+      T.a.set(0, 1, 0).applyQuaternion(T.r.copy(T.q).invert());
+      joint.quaternion.premultiply(T.r.setFromAxisAngle(T.a, yaw * share));
+      T.q.multiply(joint.quaternion);
+    }
   }
 
   // leg joint angles (FK); the IK in legs.js writes into the same parameters
