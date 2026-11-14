@@ -574,7 +574,7 @@ function update(dt) {
     Q.chestYaw += Math.sin(ph + 1.6) * 0.04 * ws;
     Q.headPitch -= Math.sin(ph * 2) * 0.02 * ws;
     Q.neckPitch += 0.12 * ws;
-    Q.tailPitch += 0.25 * ws;
+    Q.tailPitch += 0.1 * ws; Q.tailBendX += 0.035 * ws; // relaxed tail with a soft upward curve
     Q.tailWave = Math.max(Q.tailWave, 0.16 * ws);
   }
 
