@@ -767,4 +767,8 @@ updateUI();
 loop();
 $('#loading')?.remove();
 
-if (DEBUG) window.app = { cat, P, brain, setPose, ACTIONS, camera, controls, renderer, scene, POSES };
+if (DEBUG) {
+  // step(sec): advance the simulation deterministically and render (handy when the tab is throttled)
+  const step = (sec) => { for (let t = 0; t < sec; t += 1 / 30) update(1 / 30); controls.update(); renderer.render(scene, camera); };
+  window.app = { cat, P, brain, setPose, ACTIONS, camera, controls, renderer, scene, POSES, step };
+}

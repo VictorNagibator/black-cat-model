@@ -21,7 +21,7 @@ export const POSES = {
     neckPitch: 0.1, headPitch: 0.55,
     flS: 0.95, flE: -0.02, flW: 0.02,
     blH: -0.75, blK: 3.0, blA: -2.85, blZ: 0.25,
-    tailPitch: 0.95, tailYaw: 0.85, tailBendX: 0.0, tailBendY: 0.3, tailWave: 0.04,
+    tailPitch: 1.25, tailYaw: 0.45, tailBendX: -0.02, tailBendY: 0.33, tailWave: 0.04,
   }),
 
   loaf: both({
