@@ -112,7 +112,8 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
 };
 
-let lang = store.get('lang') || ((navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en');
+// Russian by default; a language picked in the settings is remembered
+let lang = store.get('lang') || 'ru';
 if (!STRINGS[lang]) lang = 'en';
 
 export const getLang = () => lang;
