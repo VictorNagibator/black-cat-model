@@ -120,8 +120,10 @@ export const BASE = {
   headPitch: 0.7, headYaw: 0, headRoll: 0,
   jaw: 0, tongue: 0, tongueUp: 0, lidUp: 0.04, lidLow: 0.08, pupil: 0.45,
   earBack: 0, whisk: 0, look: 1, flat: 1,
-  flS_L: 0.15, flE_L: -0.25, flW_L: 0.1, flZ_L: 0, flP_L: 0,
-  flS_R: 0.15, flE_R: -0.25, flW_R: 0.1, flZ_R: 0, flP_R: 0,
+  // leg IK weights (1 = paws planted on the floor) and paw placement offsets along the body
+  ikF_L: 1, ikF_R: 1, ikB_L: 1, ikB_R: 1, fzF: 0, fzB: 0,
+  flS_L: 0.89, flE_L: -0.89, flW_L: 0, flZ_L: 0, flP_L: 0,
+  flS_R: 0.89, flE_R: -0.89, flW_R: 0, flZ_R: 0, flP_R: 0,
   blH_L: -0.42, blK_L: 1.25, blA_L: -1.07, blZ_L: 0, blP_L: 0,
   blH_R: -0.42, blK_R: 1.25, blA_R: -1.07, blZ_R: 0, blP_R: 0,
   tailPitch: -0.75, tailYaw: 0, tailBendX: 0.07, tailBendY: 0, tailWave: 0.12, tailWaveSpeed: 1,
@@ -236,7 +238,7 @@ export class Cat {
     // pelvis
     this.pelvis = G(); this.torso.add(this.pelvis);
     // chest (the group must exist before the body loft is built)
-    this.chest = G(); this.chest.position.set(0, 0.05, 0.8); this.torso.add(this.chest);
+    this.chest = G(); this.chest.position.set(0, 0.05, 0.66); this.torso.add(this.chest);
     // small light spot on the belly (as in the photos)
     const spot = new THREE.Mesh(ellipsoid(0.07, 0.03, 0.09, 12), new THREE.MeshStandardMaterial({ color: 0x8a8582, roughness: 0.9 }));
     spot.position.set(0.05, -0.47, 0.55); this.torso.add(spot);
@@ -373,14 +375,16 @@ export class Cat {
     // ---- front legs ----
     this.fl = {};
     for (const [side, s] of [['L', 1], ['R', -1]]) {
-      const sh = G(); sh.position.set(0.28 * s, -0.22, 0.6); this.chest.add(sh);
-      this.addPart(sh, ellipsoid(0.18, 0.32, 0.23), [-0.02 * s, -0.05, 0], 'body', this.fur, { dir: [0, -1, -0.3] });
-      this.addPart(sh, capsuleDown(0.14, 0.56, 0.115), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
-      const el = G(); el.position.set(0, -0.68, 0); sh.add(el);
-      this.addPart(el, capsuleDown(0.11, 0.6, 0.095), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
-      const wr = G(); wr.position.set(0, -0.68, 0); el.add(wr);
+      // shoulder joint sits inside the chest; the upper arm runs down and back so the
+      // elbow tucks against the bottom of the chest, and the forearm hangs straight down
+      const sh = G(); sh.position.set(0.27 * s, -0.12, 0.72); this.chest.add(sh);
+      this.addPart(sh, ellipsoid(0.19, 0.36, 0.26), [-0.03 * s, -0.17, 0], 'body', this.fur, { dir: [0, -1, -0.3] });
+      this.addPart(sh, capsuleDown(0.15, 0.4, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
+      const el = G(); el.position.set(0, -0.5, 0); sh.add(el);
+      this.addPart(el, capsuleDown(0.115, 0.9, 0.085), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      const wr = G(); wr.position.set(0, -0.98, 0); el.add(wr);
       const paw = G(); wr.add(paw);
-      this.addPart(paw, ellipsoid(0.13, 0.105, 0.17), [0, -0.01, 0.06], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
+      this.addPart(paw, ellipsoid(0.13, 0.11, 0.17), [0, -0.005, 0.06], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
       this.addPads(paw, 0.13);
       this.addToes(paw, 0.13, 0.17);
       this.fl[side] = { sh, el, wr, paw, s };
@@ -406,6 +410,8 @@ export class Cat {
       this.addToes(ft, 0.12, 0.18);
       this.bl[side] = { hp, kn, hk, ft, s };
     }
+
+    this.legLen = { F: [0.5, 0.98], B: [0.62, 0.68, 0.46] };
 
     // ---- tail ----
     this.tail = [];
@@ -602,7 +608,7 @@ export class Cat {
     const P = this._curve.points;
     P[0].set(0, 0.13, -0.74).applyMatrix4(pel.matrix);
     P[1].set(0, 0.11, -0.2).applyMatrix4(pel.matrix);
-    P[2].set(0, 0.09, 0.42);
+    P[2].set(0, 0.09, 0.34);
     P[3].set(0, 0.05, 0.4).applyMatrix4(ch.matrix);
     P[4].set(0, 0.1, 0.85).applyMatrix4(ch.matrix);
     P[5].set(0, 0.06, 0.22).applyMatrix4(mN);
@@ -611,7 +617,7 @@ export class Cat {
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
     // profile: s, half-width, half-height, vertical offset
-    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.33, 0.45, 0.53, -0.03], [0.5, 0.46, 0.56, 0], [0.66, 0.41, 0.49, 0], [0.82, 0.29, 0.32, 0], [1, 0.27, 0.29, 0]];
+    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.3, 0.45, 0.52, -0.03], [0.48, 0.46, 0.59, -0.05], [0.64, 0.41, 0.5, -0.01], [0.82, 0.29, 0.32, 0], [1, 0.27, 0.29, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
         const t = (s - PR[i - 1][0]) / (PR[i][0] - PR[i - 1][0]);
@@ -679,7 +685,7 @@ export class Cat {
   }
 
   // apply a parameter vector to the rig
-  apply(P, t) {
+  apply(P, dt) {
     this.root.position.y = 0.1 + P.rootY;
     this.torso.position.set(0, P.torsoY, P.torsoZ);
     this.torso.rotation.set(P.pitch, 0, P.roll);
@@ -707,7 +713,12 @@ export class Cat {
       const s = i === 0 ? 1 : -1;
       w.rotation.y = -P.whisk * 0.6 * s;
     }
-    // legs
+    this.applyLegs(P);
+    this.applyTail(P, dt);
+  }
+
+  // leg joint angles (FK); the IK in legs.js writes into the same parameters
+  applyLegs(P) {
     const flatF = P.flat;
     for (const side of ['L', 'R']) {
       const L = this.fl[side];
@@ -723,12 +734,16 @@ export class Cat {
       const sumB = P.pitch + P.pelvisBend + P['blH_' + side] + P['blK_' + side] + P['blA_' + side];
       B.ft.rotation.x = -sumB * flatF + P['blP_' + side];
     }
-    // tail
+  }
+
+  applyTail(P, dt) {
+    // integrate the wave phase so speed changes never make the tail jump
+    this.tailPhase = (this.tailPhase || 0) + dt * 1.6 * P.tailWaveSpeed;
     const N = this.tail.length;
     for (let i = 0; i < N; i++) {
       const g = this.tail[i];
       const k = i / N;
-      const wave = Math.sin(t * 1.6 * P.tailWaveSpeed - i * 0.45) * P.tailWave * (0.3 + k);
+      const wave = Math.sin(this.tailPhase - i * 0.45) * P.tailWave * (0.3 + k);
       if (i === 0) g.rotation.set(P.tailPitch, P.tailYaw + wave * 0.5, 0, 'YXZ');
       else g.rotation.set(P.tailBendX, P.tailBendY + wave * 0.35, 0, 'YXZ');
       g.updateMatrix();

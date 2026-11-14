@@ -4,6 +4,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Cat, BASE } from './cat.js';
 import { POSES, poseOf, both } from './poses.js';
 import { CatAudio } from './audio.js';
+import { Legs } from './legs.js';
 import { t, getLang, setLang, applyI18n, store } from './i18n.js';
 
 const $ = (s) => document.querySelector(s);
@@ -77,6 +78,7 @@ floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
 // ---------- Cat ----------
 const cat = new Cat();
 scene.add(cat.root);
+const legs = new Legs(cat);
 
 // soft contact shadow that grounds the cat on the rug
 const contact = (() => {
@@ -180,14 +182,45 @@ const brain = {
   idle: 0, nextAuto: 10,
   laser: false, laserState: 'watch', laserStill: 0, laserPrev: new THREE.Vector3(), jump: null,
   extraLook: null,
+  goal: 'stand', path: [], hopT: 0,          // pose transitions
+  eye: { yaw: 0, pitch: 0, sy: 0, sp: 0, next: 0.5 }, // saccades
+  slowBlink: 0, nextSlowBlink: 9,
+  earT: 4, tailFlick: 0, nextFlick: 5,
+  motion: { speed: 0, dir: new THREE.Vector3(0, 0, 1) }, prevPos: new THREE.Vector3(),
 };
 
+// Poses are connected the way a real cat moves between them: to lie down from standing
+// she sits first, to get up from her side she rolls onto her chest first, and so on.
+const POSE_GRAPH = {
+  stand: ['sit', 'sphinx'],
+  sit: ['stand', 'loaf', 'sphinx'],
+  loaf: ['sit', 'sphinx', 'side'],
+  sphinx: ['stand', 'sit', 'loaf', 'side'],
+  side: ['sphinx', 'loaf', 'sleep', 'back'],
+  sleep: ['side'],
+  back: ['side'],
+};
+function posePath(from, to) {
+  const prev = { [from]: null }, queue = [from];
+  while (queue.length) {
+    const n = queue.shift();
+    if (n === to) break;
+    for (const m of POSE_GRAPH[n] || []) if (!(m in prev)) { prev[m] = n; queue.push(m); }
+  }
+  const path = [];
+  for (let n = to; n && n !== from; n = prev[n]) path.unshift(n);
+  return path;
+}
 function setPose(name) {
   if (!POSES[name]) return;
-  poseName = name;
   brain.idle = 0;
+  if (name === brain.goal && (poseName === name || brain.path.length)) return;
+  brain.goal = name;
+  brain.path = posePath(poseName, name);
+  if (brain.path.length) { poseName = brain.path.shift(); brain.hopT = 0; }
   updateUI();
 }
+const hopsTo = (name) => posePath(brain.goal, name).length + brain.path.length;
 
 // an action is a list of steps: { d, set, add, fn(t, P), rate, enter(), emote, sound, pose }
 function play(name, steps, opts = {}) {
@@ -207,8 +240,8 @@ function nextStep() {
 }
 function needPose(names, steps) {
   // switch to a suitable pose first if needed
-  if (names.includes(poseName)) return steps;
-  return [{ d: 1.4, pose: names[0] }, ...steps];
+  if (names.includes(brain.goal) && !brain.path.length) return steps;
+  return [{ d: 0.5 + 0.9 * Math.max(1, hopsTo(names[0])), pose: names[0] }, ...steps];
 }
 
 const R = (a, b) => a + Math.random() * (b - a);
@@ -244,15 +277,15 @@ const ACTIONS = {
     ]));
   },
   wash: () => play('wash', needPose(['sit'], [
-    { d: 0.8, set: { flat: 0, flS_R: -0.8, flE_R: -1.7, flW_R: -0.7, flP_R: 0.4 }, add: { headPitch: 0.35, headYaw: -0.3, headRoll: 0.2 }, rate: 5 },
-    { d: 2.2, fn: (t, p) => { Object.assign(p, { flat: 0, flS_R: -0.8, flE_R: -1.7, flW_R: -0.7 }); p.headPitch += 0.35 + Math.sin(t * 11) * 0.06; p.headYaw -= 0.3; p.headRoll += 0.2; p.tongue = 0.3 + Math.sin(t * 11) * 0.15; p.tongueUp = 0.3; p.lidUp = 0.6; } },
-    { d: 2.0, fn: (t, p) => { const w = Math.sin(t * 5); Object.assign(p, { flat: 0, flS_R: -1.15 + w * 0.15, flE_R: -1.9 + w * 0.2, flW_R: -0.9 }); p.headPitch += 0.15; p.headYaw -= 0.35 + w * 0.1; p.headRoll += 0.45 + w * 0.15; p.lidUp = 0.85; p.earBack = 0.3; } },
-    { d: 0.8, set: { flat: 1 } },
+    { d: 0.8, set: { ikF_R: 0, flat: 0, flS_R: -1.3, flE_R: -1.25, flW_R: -0.8, flP_R: 0.4 }, add: { headPitch: 0.35, headYaw: -0.3, headRoll: 0.2 }, rate: 5 },
+    { d: 2.2, fn: (t, p) => { Object.assign(p, { ikF_R: 0, flat: 0, flS_R: -1.3, flE_R: -1.25, flW_R: -0.8 }); p.headPitch += 0.35 + Math.sin(t * 11) * 0.06; p.headYaw -= 0.3; p.headRoll += 0.2; p.tongue = 0.3 + Math.sin(t * 11) * 0.15; p.tongueUp = 0.3; p.lidUp = 0.6; } },
+    { d: 2.0, fn: (t, p) => { const w = Math.sin(t * 5); Object.assign(p, { ikF_R: 0, flat: 0, flS_R: -1.6 + w * 0.15, flE_R: -1.35 + w * 0.2, flW_R: -0.9 }); p.headPitch += 0.15; p.headYaw -= 0.35 + w * 0.1; p.headRoll += 0.45 + w * 0.15; p.lidUp = 0.85; p.earBack = 0.3; } },
+    { d: 0.8, set: { flat: 1 } }, // paw goes back down (IK takes over again)
   ])),
   stretch: () => play('stretch', needPose(['stand'], [
-    { d: 1.6, set: { torsoY: 1.42, pitch: 0.42, torsoZ: -0.25, flS: -1.15, flE: 0.1, flW: 0.15, blH: -0.25, blK: 0.85, blA: -0.85, tailPitch: 0.2, lidUp: 0.85, jaw: 0.25, neckPitch: -0.75, headPitch: 0.35, earBack: 0.3 }, rate: 3 },
+    { d: 1.6, set: { fzF: 0.9, fzB: -0.1, torsoY: 1.42, pitch: 0.42, torsoZ: -0.25, flS: -1.15, flE: 0.1, flW: 0.15, blH: -0.25, blK: 0.85, blA: -0.85, tailPitch: 0.2, lidUp: 0.85, jaw: 0.25, neckPitch: -0.75, headPitch: 0.35, earBack: 0.3 }, rate: 3 },
     { d: 1.0, set: { lidUp: 0.6 } },
-    { d: 1.4, set: { torsoY: 1.65, pitch: -0.18, blH: 0.25, blK: 0.7, blA: -0.6, blH_L: -0.2, blK_L: 0.9, blA_L: -1.1, lidUp: 0.6 }, rate: 3 },
+    { d: 1.4, set: { fzF: 0.2, fzB: -0.35, torsoY: 1.65, pitch: -0.18, blH: 0.25, blK: 0.7, blA: -0.6, blH_L: -0.2, blK_L: 0.9, blA_L: -1.1, lidUp: 0.6 }, rate: 3 },
     { d: 0.5 },
   ].map(fixBoth))),
   boop: () => { audio.boop(); play('boop', [
@@ -266,7 +299,7 @@ const ACTIONS = {
   ]); },
   trap: () => play('trap', [
     { d: 2.2, fn: (t, p) => {
-      Object.assign(p, both({ flS: -0.25, flE: 2.3, flW: 0.9, flZ: -0.1 }));
+      Object.assign(p, both({ flS: -0.45, flE: 2.0, flW: 0.9, flZ: -0.1 }));
       const k = Math.sin(t * 20);
       p.blH_L = -0.95 + k * 0.4; p.blH_R = -0.95 - k * 0.4; p.blK_L = 1.3 - k * 0.4; p.blK_R = 1.3 + k * 0.4;
       p.jaw = 0.3; p.earBack = 1; p.pupil = 0.95; p.headPitch -= 0.2;
@@ -381,7 +414,7 @@ renderName();
 $('#panelToggle').addEventListener('click', () => document.body.classList.toggle('panel-hidden'));
 
 function updateUI() {
-  document.querySelectorAll('[data-pose]').forEach((b) => b.classList.toggle('on', b.dataset.pose === poseName));
+  document.querySelectorAll('[data-pose]').forEach((b) => b.classList.toggle('on', b.dataset.pose === brain.goal));
   $('#laser').classList.toggle('on', brain.laser);
   document.body.classList.toggle('laser-on', brain.laser);
 }
@@ -414,12 +447,26 @@ const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
 let elapsed = 0;
 
 function damp(cur, target, rate, dt) { return cur + (target - cur) * (1 - Math.exp(-rate * dt)); }
+// critically damped spring (no sudden start, no overshoot); `vel` holds per-key velocities
+const VEL = {};
+function spring(key, cur, target, smoothTime, dt) {
+  const omega = 2 / smoothTime, x = omega * dt;
+  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = cur - target, v = VEL[key] || 0;
+  const temp = (v + omega * change) * dt;
+  VEL[key] = (v - omega * temp) * exp;
+  return target + (change + temp) * exp;
+}
 function angDiff(a, b) { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; }
 
 function update(dt) {
   elapsed += dt;
   const now = performance.now();
   brain.idle += dt;
+
+  // --- pose transitions: move to the next pose on the path once this one has mostly settled
+  brain.hopT += dt;
+  if (brain.path.length && brain.hopT > 0.8) { poseName = brain.path.shift(); brain.hopT = 0; }
 
   // --- target pose (+ current action step) ---
   Object.assign(T, BASE, POSES[poseName]);
@@ -450,7 +497,7 @@ function update(dt) {
       brain.extraLook = toy.p.clone().setY(0.3);
       play('toy', [
         { d: 0.9, set: { pupil: 0.95 }, fn: (t, p) => { p.pelvisRoll = Math.sin(t * 18) * 0.12; p.torsoY = 1.35; p.pitch = 0.12; }, emote: 'e.wiggle' },
-        { d: 0.35, enter: () => { emote(t('e.pounce'), 'big'); }, set: { flS: -1.1, flE: -0.2, jaw: 0.5, earBack: 0.3 }, rate: 14 },
+        { d: 0.35, enter: () => { emote(t('e.pounce'), 'big'); }, set: { ikF: 0, flS: -1.0, flE: -0.6, flW: -0.2, jaw: 0.5, earBack: 0.3 }, rate: 14 },
         { d: 1.6, set: { jaw: 0, lidUp: 0.3 }, fn: (t, p) => { p.headPitch += 0.2; } },
       ].map(fixBoth), { onDone: () => { brain.extraLook = null; setTimeout(() => setProp(null), 1500); } });
     }
@@ -471,7 +518,7 @@ function update(dt) {
     else moving = Math.abs(diff) > 0.15 ? 0.4 : 0;
     brain.idle = 0;
   } else if (brain.walkTarget && poseName !== 'stand' && !brain.jump) {
-    if (!a) setPose('stand');
+    if (!a && brain.goal !== 'stand') setPose('stand');
   }
   // stay on the rug
   if (brain.pos.length() > 6.8) brain.pos.setLength(6.8);
@@ -484,7 +531,7 @@ function update(dt) {
     const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
     brain.pos.lerpVectors(j.from, j.to, e);
     T.rootY = Math.sin(k * Math.PI) * 1.1;
-    Object.assign(T, both({ flS: -1.3 + k * 0.8, flE: -0.2, blH: 0.6, blK: 0.4, blA: -0.3 }));
+    Object.assign(T, both({ ikF: 0, ikB: 0, flS: -1.2 + k * 1.2, flE: -0.3 - k * 0.3, flW: 0, blH: 0.5 - k * 0.6, blK: 0.4 + k * 0.8, blA: -0.4 - k * 0.5 }));
     T.pitch = -0.25 + k * 0.4; T.tailPitch = 0.1; T.pupil = 1; T.earBack = 0.4;
     rate = 14;
     if (k >= 1) { brain.jump = null; emote([t('e.pounce'), t('e.caught'), '???'][Math.floor(R(0, 3))], 'big'); brain.laserState = 'land'; brain.landT = 0; }
@@ -504,32 +551,51 @@ function update(dt) {
 
   // --- smooth towards the target ---
   for (const k in T) {
-    if (k === 'rootY' && brain.jump) { P[k] = T[k]; continue; }
-    P[k] = damp(P[k], T[k], rate, dt);
+    if (k === 'rootY' && brain.jump) { P[k] = T[k]; VEL[k] = 0; continue; }
+    P[k] = spring(k, P[k], T[k], 1.15 / rate, dt);
   }
 
   // --- walk cycle (additive) ---
   const Q = { ...P };
-  const ws = brain.walkSpeed;
-  if (ws > 0.01) {
-    brain.phase += dt * (5.5 + 3 * ws) * Math.max(0.35, ws);
-    const ph = brain.phase;
-    const legs = [['L', 0], ['R', Math.PI]];
-    for (const [s, o] of legs) {
-      const f = ph + o, b = ph + o + Math.PI + 0.6;
-      Q['flS_' + s] += 0.45 * Math.sin(f) * ws;
-      Q['flE_' + s] += 0.9 * Math.max(0, -Math.cos(f)) * ws;
-      Q['flW_' + s] += 0.6 * Math.max(0, -Math.cos(f)) * ws;
-      Q['blH_' + s] += 0.4 * Math.sin(b) * ws;
-      Q['blK_' + s] += 0.55 * Math.max(0, -Math.cos(b)) * ws;
-      Q['blA_' + s] -= 0.35 * Math.max(0, -Math.cos(b)) * ws;
-    }
-    Q.torsoY += Math.sin(ph * 2) * 0.03 * ws;
-    Q.chestRoll += Math.sin(ph) * 0.04 * ws;
-    Q.pelvisRoll -= Math.sin(ph) * 0.05 * ws;
-    Q.headPitch -= Math.sin(ph * 2) * 0.03 * ws;
-    Q.tailWave = Math.max(Q.tailWave, 0.2 * ws);
+  // actual root velocity (drives the gait)
+  const M = brain.motion;
+  const moved = tmp.copy(brain.pos).sub(brain.prevPos); brain.prevPos.copy(brain.pos);
+  const spd = brain.jump ? 0 : moved.length() / Math.max(dt, 1e-4);
+  M.speed = damp(M.speed, spd, 10, dt);
+  if (spd > 0.05) M.dir.copy(moved).normalize();
+  else M.dir.set(Math.sin(brain.yaw), 0, Math.cos(brain.yaw));
+  const ws = Math.min(1, M.speed / 1.6);
+  if (ws > 0.02) {
+    // body rides a little lower when walking, rolls with the steps, head stays steady
+    const ph = legs.phase * Math.PI * 2;
+    Q.torsoY += -0.05 * ws + Math.sin(ph * 2) * 0.025 * ws;
+    Q.chestRoll += Math.sin(ph + 1.6) * 0.035 * ws;
+    Q.pelvisRoll += Math.sin(ph) * 0.045 * ws;
+    Q.chestYaw += Math.sin(ph + 1.6) * 0.04 * ws;
+    Q.headPitch -= Math.sin(ph * 2) * 0.02 * ws;
+    Q.neckPitch += 0.12 * ws;
+    Q.tailPitch += 0.25 * ws;
+    Q.tailWave = Math.max(Q.tailWave, 0.16 * ws);
   }
+
+  // --- idle life: weight shifts, small head movements, ear twitches, tail-tip flicks
+  const calm = !brain.petting && !brain.laser && ws < 0.05;
+  if (calm && (poseName === 'stand' || poseName === 'sit' || poseName === 'loaf' || poseName === 'sphinx')) {
+    Q.pelvisRoll += Math.sin(elapsed * 0.37) * 0.025;
+    Q.chestRoll += Math.sin(elapsed * 0.29 + 1.3) * 0.02;
+    Q.torsoZ += Math.sin(elapsed * 0.21) * 0.03;
+    Q.headYaw += (Math.sin(elapsed * 0.53) + Math.sin(elapsed * 1.31 + 2)) * 0.025;
+    Q.headPitch += Math.sin(elapsed * 0.71 + 0.5) * 0.02;
+    Q.headRoll += Math.sin(elapsed * 0.43 + 1) * 0.03;
+  }
+  brain.earT -= dt;
+  if (brain.earT < 0) { brain.earT = R(3, 9); brain.earPulse = 1; }
+  brain.earPulse = Math.max(0, (brain.earPulse || 0) - dt * 6);
+  Q.earBack += Math.sin(brain.earPulse * Math.PI) * 0.35;
+  brain.nextFlick -= dt;
+  if (brain.nextFlick < 0) { brain.nextFlick = R(4, 11); brain.tailFlick = 1; }
+  brain.tailFlick = Math.max(0, brain.tailFlick - dt * 1.2);
+  Q.tailWave += brain.tailFlick * 0.25;
 
   // --- breathing ---
   const br = Math.sin(elapsed * (poseName === 'sleep' ? 1.6 : 2.4));
@@ -543,6 +609,14 @@ function update(dt) {
   brain.blink = Math.max(0, brain.blink - dt * 7);
   const bl = brain.blink > 0 ? Math.sin(brain.blink * Math.PI) : 0;
   Q.lidUp = Math.max(Q.lidUp, bl); Q.lidLow = Math.max(Q.lidLow, bl * 0.6);
+  // a slow blink ("cat kiss") every now and then while calmly looking at you
+  brain.nextSlowBlink -= dt;
+  if (brain.nextSlowBlink < 0 && calm && !a && Q.look > 0.5) { brain.slowBlink = 1; brain.nextSlowBlink = R(10, 20); }
+  if (brain.slowBlink > 0) {
+    brain.slowBlink = Math.max(0, brain.slowBlink - dt / 1.6);
+    const sb = Math.sin((1 - brain.slowBlink) * Math.PI);
+    Q.lidUp = Math.max(Q.lidUp, Math.min(1, sb * 1.25)); Q.lidLow = Math.max(Q.lidLow, sb * 0.7);
+  }
 
   // --- gaze ---
   lookLogic(Q, dt);
@@ -550,7 +624,9 @@ function update(dt) {
   // root transform
   cat.root.position.set(brain.pos.x, 0, brain.pos.z);
   cat.root.rotation.y = brain.yaw;
-  cat.apply(Q, elapsed);
+  cat.apply(Q, dt);
+  legs.update(dt, Q, M);
+  cat.applyLegs(Q);
   updateContact();
 
   // sleeping: Zzz
@@ -593,9 +669,17 @@ function lookLogic(Q, dt) {
   Q.headPitch -= L.pitch * 0.55; Q.neckPitch -= L.pitch * 0.35;
   // turn the chest a bit when looking far to the side
   Q.chestYaw += L.yaw * 0.12;
+  // eyes jump to the gaze target in quick saccades with small fixation shifts in between
+  const E = brain.eye;
+  E.next -= dt;
+  const gy = yaw * w - L.yaw * 0.95, gp = pitch * w - L.pitch * 0.9;
+  if (E.next < 0 || Math.abs(gy - E.sy) > 0.18 || Math.abs(gp - E.sp) > 0.15) {
+    E.sy = gy + R(-0.04, 0.04); E.sp = gp + R(-0.03, 0.03); E.next = R(0.35, 1.6);
+  }
+  E.yaw = damp(E.yaw, E.sy, 28, dt); E.pitch = damp(E.pitch, E.sp, 28, dt);
   for (const e of cat.eyes) {
-    e.rotation.y = THREE.MathUtils.clamp(L.yaw * 0.3, -0.3, 0.3);
-    e.rotation.x = THREE.MathUtils.clamp(-L.pitch * 0.3, -0.25, 0.25);
+    e.rotation.y = THREE.MathUtils.clamp(E.yaw, -0.32, 0.32);
+    e.rotation.x = THREE.MathUtils.clamp(-E.pitch, -0.25, 0.25);
   }
 }
 
@@ -616,7 +700,8 @@ function laserLogic(dt) {
     if (brain.landT > 1.2) brain.laserState = 'watch';
     return;
   }
-  if (poseName !== 'stand') { setPose('stand'); }
+  if (brain.goal !== 'stand') setPose('stand');
+  if (poseName !== 'stand') return;
   const want = Math.atan2(d.x, d.z);
   const diff = angDiff(brain.yaw, want);
   if (dist > 4.6) { brain.walkTarget = dot.clone(); brain.crouch = 0; brain.laserState = 'watch'; return; }
@@ -627,13 +712,14 @@ function laserLogic(dt) {
   // crouch and wiggle the butt
   brain.crouch = Math.min(1, (brain.crouch || 0) + dt * 2);
   const c = brain.crouch;
-  T.torsoY -= 0.55 * c; T.pitch += 0.08 * c;
-  Object.assign(T, both({ flS: 0.2 - 0.9 * c, flE: -0.3 + 1.6 * c, flW: 0.1 - 0.5 * c, blH: -0.45 - 0.7 * c, blK: 1.1 + 0.9 * c, blA: -0.95 - 0.6 * c }));
+  T.torsoY -= 0.62 * c; T.pitch += 0.1 * c; T.fzF += 0.25 * c; T.fzB += 0.1 * c;
+  T.neckPitch += 0.25 * c; T.headPitch -= 0.2 * c;
   T.earBack = 0.2 * c; T.tailPitch = -0.15; T.tailWave = 0.35; T.tailWaveSpeed = 3;
   T.pelvisRoll = Math.sin(elapsed * 16) * 0.14 * (brain.laserStill > 0.3 ? 1 : 0.3);
   if (brain.laserStill > 0.75 && dist > 1.6 && c > 0.9) {
     const to = dot.clone().setY(0).sub(forward().multiplyScalar(1.7));
-    brain.jump = { from: brain.pos.clone(), to, t: 0, dur: 0.5 };
+    brain.jump = { from: brain.pos.clone(), to, t: 0, dur: 0.55 };
+    legs.release();
     brain.crouch = 0; brain.laserStill = -1;
   }
 }
@@ -669,7 +755,8 @@ function onResize() {
 addEventListener('resize', onResize);
 
 function loop() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  // cap the frame step; ?debug allows bigger steps so throttled automated browsers keep real time
+  const dt = Math.min(clock.getDelta(), DEBUG ? 0.3 : 0.05);
   update(dt);
   controls.update();
   renderer.render(scene, camera);
