@@ -666,7 +666,11 @@ function lookLogic(Q, dt) {
   L.yaw = damp(L.yaw, yaw * w, 4, dt);
   L.pitch = damp(L.pitch, pitch * w, 4, dt);
   Q.lookYaw = L.yaw; // applied around the world vertical in cat.turnHead()
-  Q.headPitch -= L.pitch * 0.55; Q.neckPitch -= L.pitch * 0.35;
+  // looking down is mostly done by bending the neck (head moves forward and down, chin stays
+  // clear of the chest); looking up mostly tilts the head
+  const lookDown = Math.max(0, -L.pitch), lookUp = Math.max(0, L.pitch);
+  Q.neckPitch += lookDown * 0.75 - lookUp * 0.35;
+  Q.headPitch += lookDown * 0.25 - lookUp * 0.55;
   // turn the chest a bit when looking far to the side
   Q.chestYaw += L.yaw * 0.12;
   // eyes jump to the gaze target in quick saccades with small fixation shifts in between

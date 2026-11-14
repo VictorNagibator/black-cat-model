@@ -598,7 +598,7 @@ export class Cat {
         const id = i * (NA + 1) + j, s = i / NR, sa = Math.sin((j / NA) * Math.PI * 2);
         const chestF = THREE.MathUtils.smoothstep(s, 0.48, 0.7) * (1 - THREE.MathUtils.smoothstep(s, 0.78, 0.9)) * THREE.MathUtils.clamp(0.3 - sa, 0, 1);
         const ruff = THREE.MathUtils.smoothstep(s, 0.7, 0.85) * (1 - THREE.MathUtils.smoothstep(s, 0.93, 1));
-        k[id] = 1 + 0.9 * chestF + 0.6 * ruff;
+        k[id] = 1 + 0.9 * chestF + 0.3 * ruff;
         d.set([0, -0.25 * Math.max(0, -sa) - 0.4 * ruff, -1], id * 3);
       }
       g.setAttribute('furK', new THREE.BufferAttribute(k, 1));
@@ -618,8 +618,9 @@ export class Cat {
     P[2].set(0, 0.09, 0.34);
     P[3].set(0, 0.05, 0.4).applyMatrix4(ch.matrix);
     P[4].set(0, 0.0, 0.88).applyMatrix4(ch.matrix);
-    P[5].set(0, 0.06, 0.22).applyMatrix4(mN);
-    P[6].set(0, -0.16, -0.1).applyMatrix4(mH);
+    P[5].set(0, 0.1, 0.2).applyMatrix4(mN);
+    // the neck joins the back of the skull (not its underside), leaving room for the chin
+    P[6].set(0, -0.04, -0.3).applyMatrix4(mH);
     V.up.set(0, 1, 0).applyQuaternion(pel.quaternion);
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
