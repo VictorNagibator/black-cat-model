@@ -116,8 +116,8 @@ export const BASE = {
   rootY: 0,
   torsoY: 1.6, torsoZ: 0, pitch: 0, roll: 0,
   pelvisBend: 0, pelvisRoll: 0, chestBend: 0, chestYaw: 0, chestRoll: 0,
-  neckPitch: -0.8, neckYaw: 0, neckRoll: 0,
-  headPitch: 0.7, headYaw: 0, headRoll: 0,
+  neckPitch: -0.95, neckYaw: 0, neckRoll: 0,
+  headPitch: 0.85, headYaw: 0, headRoll: 0,
   jaw: 0, tongue: 0, tongueUp: 0, lidUp: 0.04, lidLow: 0.08, pupil: 0.45,
   earBack: 0, whisk: 0, look: 1, flat: 1,
   // leg IK weights (1 = paws planted on the floor) and paw placement offsets along the body
@@ -244,21 +244,28 @@ export class Cat {
     spot.position.set(0.05, -0.47, 0.55); this.torso.add(spot);
 
     // neck: its surface is part of the body loft (see updateBody), this is just the joint
-    this.neck = G(); this.neck.position.set(0, 0.22, 0.95); this.chest.add(this.neck);
-    // collar
+    this.neck = G(); this.neck.position.set(0, 0.18, 1.05); this.chest.add(this.neck);
+    // collar: lives in torso space and is fitted to the neck section of the body loft every
+    // frame (see updateBody), so it always hugs the neck whatever the pose
     this.collar = new THREE.Group();
-    const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.5 });
+    this.collar.matrixAutoUpdate = false;
+    const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.55 });
     this.collarMat = collarMat;
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.045, 10, 40), collarMat);
-    band.scale.set(1, 1.08, 1); band.rotation.x = Math.PI / 2 - 0.5;
-    this.collar.add(band);
-    const tag = new THREE.Mesh(new THREE.SphereGeometry(0.055, 12, 10), new THREE.MeshStandardMaterial({ color: 0xd8c27a, metalness: 0.9, roughness: 0.25 }));
-    tag.position.set(0, -0.36, 0.22); this.collar.add(tag);
-    this.collar.position.set(0, 0.06, 0.12);
-    this.neck.add(this.collar);
+    this.collarBand = new THREE.Mesh(new THREE.TorusGeometry(1, 0.11, 10, 56), collarMat);
+    this.collarBand.castShadow = true;
+    this.collar.add(this.collarBand);
+    // small round tag on a ring at the bottom of the collar
+    const gold = new THREE.MeshStandardMaterial({ color: 0xd8c27a, metalness: 0.9, roughness: 0.25 });
+    this.collarTag = new THREE.Group();
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.022, 0.006, 6, 16), gold);
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.012, 20), gold);
+    disc.rotation.x = Math.PI / 2; disc.position.y = -0.065;
+    this.collarTag.add(ring, disc);
+    this.collar.add(this.collarTag);
+    this.torso.add(this.collar);
 
     // head
-    this.head = G(); this.head.position.set(0, 0.44, 0.47); this.neck.add(this.head);
+    this.head = G(); this.head.position.set(0, 0.5, 0.42); this.neck.add(this.head);
     const H = this.head;
     // fur is short and smooth around the eyes and nose
     const EYE = [new THREE.Vector3(0.26, 0.085, 0.395), new THREE.Vector3(-0.26, 0.085, 0.395)];
@@ -610,14 +617,14 @@ export class Cat {
     P[1].set(0, 0.11, -0.2).applyMatrix4(pel.matrix);
     P[2].set(0, 0.09, 0.34);
     P[3].set(0, 0.05, 0.4).applyMatrix4(ch.matrix);
-    P[4].set(0, 0.1, 0.85).applyMatrix4(ch.matrix);
+    P[4].set(0, 0.0, 0.88).applyMatrix4(ch.matrix);
     P[5].set(0, 0.06, 0.22).applyMatrix4(mN);
     P[6].set(0, -0.16, -0.1).applyMatrix4(mH);
     V.up.set(0, 1, 0).applyQuaternion(pel.quaternion);
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
     // profile: s, half-width, half-height, vertical offset
-    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.3, 0.45, 0.52, -0.03], [0.48, 0.46, 0.59, -0.05], [0.64, 0.41, 0.5, -0.01], [0.82, 0.29, 0.32, 0], [1, 0.27, 0.29, 0]];
+    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.3, 0.45, 0.52, -0.03], [0.48, 0.46, 0.59, -0.05], [0.64, 0.39, 0.42, -0.05], [0.82, 0.27, 0.29, 0], [1, 0.26, 0.28, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
         const t = (s - PR[i - 1][0]) / (PR[i][0] - PR[i - 1][0]);
@@ -655,6 +662,20 @@ export class Cat {
     this.bodyGeo.attributes.position.needsUpdate = true;
     this.bodyGeo.computeVertexNormals();
     this.bodyGeo.computeBoundingSphere();
+
+    // fit the collar to the neck section: centre, orientation and radii from the loft
+    const cs = 0.8;
+    this._curve.getPoint(cs, V.c);
+    this._curve.getTangent(cs, V.t);
+    V.u.copy(V.uc).lerp(V.un, THREE.MathUtils.smoothstep(cs, 0.68, 0.9)).normalize();
+    V.x.crossVectors(V.u, V.t).normalize();
+    V.u.crossVectors(V.t, V.x);
+    const crx = prof(cs, 1), cry = prof(cs, 2), coff = prof(cs, 3);
+    const m = this.collar.matrix.makeBasis(V.x, V.u, V.t);
+    m.setPosition(V.c.x + V.u.x * coff, V.c.y + V.u.y * coff, V.c.z + V.u.z * coff);
+    this.collarBand.scale.set(crx + 0.035, cry * 0.98 + 0.035, 0.42);
+    this.collarTag.position.set(0, -(cry + 0.05), 0.03);
+    this.collar.matrixWorldNeedsUpdate = true;
   }
 
   // toes: bumps along the front edge of the paw
