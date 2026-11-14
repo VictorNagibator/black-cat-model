@@ -288,8 +288,8 @@ export class Cat {
       skull.computeVertexNormals(); }
     this.addPart(H, skull, [0, 0, 0], 'head', this.fur, { dir: [0, 0.3, -1], k: 0.9, kFn: faceK });
     // cheeks (Scottish Folds have a round, wide face)
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [0.3, -0.2, 0.15], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.9, kFn: faceK });
-    this.addPart(H, ellipsoid(0.33, 0.28, 0.3), [-0.3, -0.2, 0.15], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.9, kFn: faceK });
+    this.addPart(H, ellipsoid(0.28, 0.24, 0.26), [0.27, -0.2, 0.17], 'head', this.fur, { dir: [1, -0.6, -0.7], k: 1.4, kFn: faceK });
+    this.addPart(H, ellipsoid(0.28, 0.24, 0.26), [-0.27, -0.2, 0.17], 'head', this.fur, { dir: [-1, -0.6, -0.7], k: 1.4, kFn: faceK });
     // wide nose bridge from the eyes down to the nose
     this.addPart(H, ellipsoid(0.16, 0.18, 0.1), [0, -0.03, 0.45], 'head', this.fur, { dir: [0, 1, -0.3], k: 0.45, kFn: faceK });
     // whisker pads
@@ -339,11 +339,11 @@ export class Cat {
     // ears folded tightly forward at the corners of the head
     this.ears = [];
     for (const s of [1, -1]) {
-      const eg = G(); eg.position.set(0.36 * s, 0.37, 0.02); H.add(eg);
-      const bg = new THREE.CylinderGeometry(0.12, 0.18, 0.09, 18); bg.scale(1, 1, 0.5); bg.translate(0, 0.045, 0);
+      const eg = G(); eg.position.set(0.37 * s, 0.38, 0.0); H.add(eg);
+      const bg = new THREE.CylinderGeometry(0.17, 0.25, 0.13, 20); bg.scale(1, 1, 0.5); bg.translate(0, 0.065, 0);
       this.addPart(eg, bg, [0, 0, 0], 'head', this.fur, { dir: [0, 1, 0], k: 0.6 });
-      const fold = G(); fold.position.set(0, 0.085, 0.03); eg.add(fold);
-      const tgeo = new THREE.ConeGeometry(0.13, 0.17, 18); tgeo.scale(1, 1, 0.35); tgeo.translate(0, 0.085, 0);
+      const fold = G(); fold.position.set(0, 0.12, 0.04); eg.add(fold);
+      const tgeo = new THREE.ConeGeometry(0.18, 0.24, 20); tgeo.scale(1, 1, 0.35); tgeo.translate(0, 0.12, 0);
       this.addPart(fold, tgeo, [0, 0, 0], 'head', this.fur, { dir: [0, 1, 0], k: 0.5 });
       this.ears.push({ g: eg, fold, s });
     }
