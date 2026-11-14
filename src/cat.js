@@ -122,6 +122,8 @@ export const BASE = {
   earBack: 0, whisk: 0, look: 1, flat: 1,
   // leg IK weights (1 = paws planted on the floor) and paw placement offsets along the body
   ikF_L: 1, ikF_R: 1, ikB_L: 1, ikB_R: 1, fzF: 0, fzB: 0,
+  // right front paw reaching for a point in head space (washing), and its wrist bend
+  reachR: 0, reachX: 0, reachY: 0, reachZ: 0, reachW: 0,
   flS_L: 0.89, flE_L: -0.89, flW_L: 0, flZ_L: 0, flP_L: 0,
   flS_R: 0.89, flE_R: -0.89, flW_R: 0, flZ_R: 0, flP_R: 0,
   blH_L: -0.42, blK_L: 1.25, blA_L: -1.07, blZ_L: 0, blP_L: 0,
@@ -395,6 +397,7 @@ export class Cat {
       this.addPads(paw, 0.13);
       this.addToes(paw, 0.13, 0.17);
       this.fl[side] = { sh, el, wr, paw, s };
+      sh.traverse((o) => { o.userData.limb = 'F' + side; });
     }
     // ---- hind legs ----
     this.bl = {};
@@ -416,6 +419,7 @@ export class Cat {
       this.addPads(ft, 0.12);
       this.addToes(ft, 0.12, 0.18);
       this.bl[side] = { hp, kn, hk, ft, s };
+      hp.traverse((o) => { o.userData.limb = 'B' + side; });
     }
 
     this.legLen = { F: [0.5, 0.98], B: [0.62, 0.68, 0.46] };
@@ -701,6 +705,22 @@ export class Cat {
   }
 
   setFur(on) { for (const s of this.shellMeshes) s.visible = on; }
+
+  // lowest world-space point of the body (needs up-to-date world matrices); limbs listed in
+  // `exclude` (e.g. 'FL', 'BR') are skipped, which is used for paws planted by the leg IK
+  lowestPoint(exclude, filter) {
+    let min = Infinity;
+    for (const m of this.parts) {
+      if (!m.visible || (exclude && exclude.has(m.userData.limb)) || (filter && !filter(m))) continue;
+      const pa = m.geometry.attributes.position, e = m.matrixWorld.elements;
+      const step = pa.count > 300 ? 3 : 1;
+      for (let i = 0; i < pa.count; i += step) {
+        const y = e[1] * pa.getX(i) + e[5] * pa.getY(i) + e[9] * pa.getZ(i) + e[13];
+        if (y < min) min = y;
+      }
+    }
+    return min;
+  }
   setCollar(c) {
     this.collar.visible = !!c;
     if (c) this.collarMat.color.set(c);
@@ -708,7 +728,7 @@ export class Cat {
 
   // apply a parameter vector to the rig
   apply(P, dt) {
-    this.root.position.y = 0.1 + P.rootY;
+    this.root.position.y = 0.1 + P.rootY + (this.groundLift || 0);
     this.torso.position.set(0, P.torsoY, P.torsoZ);
     this.torso.rotation.set(P.pitch, 0, P.roll);
     this.pelvis.rotation.set(P.pelvisBend, 0, P.pelvisRoll);
@@ -754,9 +774,10 @@ export class Cat {
 
   // leg joint angles (FK); the IK in legs.js writes into the same parameters
   applyLegs(P) {
-    const flatF = P.flat;
     for (const side of ['L', 'R']) {
       const L = this.fl[side];
+      // a paw reaching for the face (washing) is not kept flat
+      const flatF = P.flat * (side === 'R' ? 1 - (P.reachR || 0) : 1);
       L.sh.rotation.set(P['flS_' + side], 0, P['flZ_' + side] * L.s);
       L.el.rotation.x = P['flE_' + side];
       L.wr.rotation.x = P['flW_' + side];

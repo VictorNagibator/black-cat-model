@@ -100,6 +100,25 @@ export class Legs {
       }
       this.solve(f, target, Q, w, lift);
     }
+    if ((Q.reachR || 0) > 0.01) this.reach('R', Q, Q.reachR);
+  }
+
+  // front paw reaching for a point given in head space (used for washing the face)
+  reach(side, Q, w) {
+    const cat = this.cat, L = cat.fl[side], [L1, L2] = cat.legLen.F;
+    const tw = cat.head.localToWorld(this._w.set(Q.reachX, Q.reachY, Q.reachZ));
+    const t = cat.chest.worldToLocal(tw.clone());
+    const dx = t.x - L.sh.position.x, dy = t.y - L.sh.position.y, dz = t.z - L.sh.position.z;
+    const D = Math.max(1e-3, Math.hypot(dx, dy, dz));
+    // swing the leg sideways towards the target, then solve the rest in the leg plane
+    const rz = Math.asin(clamp(dx / D, -0.85, 0.85));
+    const k = D / Math.max(1e-3, Math.hypot(dy, dz));
+    const [s, e] = twoBone(0, 0, dy * k, dz * k, L1, L2, true);
+    const lerp = THREE.MathUtils.lerp, n = '_' + side;
+    Q['flS' + n] = lerp(Q['flS' + n], s, w);
+    Q['flE' + n] = lerp(Q['flE' + n], e, w);
+    Q['flW' + n] = lerp(Q['flW' + n], Q.reachW, w);
+    Q['flZ' + n] = lerp(Q['flZ' + n], rz / L.s, w);
   }
 
   computeHome(f, Q, motion, lead) {

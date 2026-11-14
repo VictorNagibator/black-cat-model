@@ -95,7 +95,8 @@ const contact = (() => {
 const _cp = new THREE.Vector3(), _cc = new THREE.Vector3(), _ch = new THREE.Vector3();
 function updateContact() {
   cat.pelvis.getWorldPosition(_cp); cat.chest.getWorldPosition(_cc); cat.head.getWorldPosition(_ch);
-  const cx = (_cp.x + _cc.x * 2 + _ch.x) / 4, cz = (_cp.z + _cc.z * 2 + _ch.z) / 4;
+  // weighted towards the pelvis, which carries the weight when sitting or lying
+  const cx = _cp.x * 0.5 + _cc.x * 0.35 + _ch.x * 0.15, cz = _cp.z * 0.5 + _cc.z * 0.35 + _ch.z * 0.15;
   const dx = _ch.x - _cp.x, dz = _ch.z - _cp.z;
   const len = Math.hypot(dx, dz) + 1.6;
   const lying = Math.min(1, Math.abs(P.roll) / 1.4);
@@ -276,11 +277,22 @@ const ACTIONS = {
       { d: 0.4, enter: () => setTimeout(() => setProp(null), 2500) },
     ]));
   },
+  // wash: lick the paw held in front of the mouth, then wipe it over the cheek and ear
+  // (the paw is driven by IK towards points in head space, so it never goes through the face)
   wash: () => play('wash', needPose(['sit'], [
-    { d: 0.8, set: { ikF_R: 0, flat: 0, flS_R: -1.3, flE_R: -1.25, flW_R: -0.8, flP_R: 0.4 }, add: { headPitch: 0.35, headYaw: -0.3, headRoll: 0.2 }, rate: 5 },
-    { d: 2.2, fn: (t, p) => { Object.assign(p, { ikF_R: 0, flat: 0, flS_R: -1.3, flE_R: -1.25, flW_R: -0.8 }); p.headPitch += 0.35 + Math.sin(t * 11) * 0.06; p.headYaw -= 0.3; p.headRoll += 0.2; p.tongue = 0.3 + Math.sin(t * 11) * 0.15; p.tongueUp = 0.3; p.lidUp = 0.6; } },
-    { d: 2.0, fn: (t, p) => { const w = Math.sin(t * 5); Object.assign(p, { ikF_R: 0, flat: 0, flS_R: -1.6 + w * 0.15, flE_R: -1.35 + w * 0.2, flW_R: -0.9 }); p.headPitch += 0.15; p.headYaw -= 0.35 + w * 0.1; p.headRoll += 0.45 + w * 0.15; p.lidUp = 0.85; p.earBack = 0.3; } },
-    { d: 0.8, set: { flat: 1 } }, // paw goes back down (IK takes over again)
+    { d: 0.9, set: { ikF_R: 0, reachR: 1, reachX: -0.06, reachY: -0.46, reachZ: 0.74, reachW: -0.9, look: 0 }, add: { headPitch: 0.3, headYaw: -0.15 }, rate: 4 },
+    { d: 2.4, fn: (t, p) => {
+      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.06, reachY: -0.46 + Math.sin(t * 9) * 0.03, reachZ: 0.74, reachW: -0.9, look: 0 });
+      p.headPitch += 0.3 + Math.sin(t * 9) * 0.07; p.headYaw -= 0.15;
+      p.tongue = 0.3 + Math.max(0, Math.sin(t * 9)) * 0.2; p.tongueUp = 0.35; p.lidUp = 0.65;
+    } },
+    { d: 2.6, fn: (t, p) => {
+      const w = 0.5 - 0.5 * Math.cos(t * 4.2);
+      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.42 - 0.22 * w, reachY: -0.16 + 0.34 * w, reachZ: 0.62 - 0.27 * w, reachW: 0.6, look: 0 });
+      p.headPitch += 0.12; p.headYaw -= 0.22; p.headRoll += 0.2 * w;
+      p.lidUp = 0.9; p.lidLow = 0.4; p.earBack = 0.35;
+    }, rate: 7 },
+    { d: 0.9, set: { reachR: 0 } }, // paw goes back down (IK takes over again)
   ])),
   stretch: () => play('stretch', needPose(['stand'], [
     { d: 1.6, set: { fzF: 0.9, fzB: -0.1, torsoY: 1.42, pitch: 0.42, torsoZ: -0.25, flS: -1.15, flE: 0.1, flW: 0.15, blH: -0.25, blK: 0.85, blA: -0.85, tailPitch: 0.2, lidUp: 0.85, jaw: 0.25, neckPitch: -0.75, headPitch: 0.35, earBack: 0.3 }, rate: 3 },
@@ -625,6 +637,7 @@ function update(dt) {
   cat.root.position.set(brain.pos.x, 0, brain.pos.z);
   cat.root.rotation.y = brain.yaw;
   cat.apply(Q, dt);
+  groundContact(Q, dt);
   legs.update(dt, Q, M);
   cat.applyLegs(Q);
   updateContact();
@@ -636,6 +649,31 @@ function update(dt) {
   }
 
   autonomy(dt);
+}
+
+// Keep the body resting on the rug: whenever the hind paws are not planted by the IK (sitting,
+// lying, sleeping...), shift the whole cat so its lowest point just touches the floor (sinking
+// a little into the fur), instead of floating above it or dipping under it.
+const GROUND_TOP = 0.12, FUR_SINK = 0.05;
+const _exclude = new Set();
+const isCore = (m) => m.userData.part === 'body';
+const isLimbOrHead = (m) => m.userData.part !== 'body' && m.userData.part !== 'tail';
+function groundContact(Q, dt) {
+  const gw = brain.jump ? 0 : 1 - Math.min(1, Math.max(Q.ikB_L, Q.ikB_R));
+  let desired = 0;
+  if (gw > 0.01) {
+    cat.root.updateMatrixWorld(true);
+    _exclude.clear();
+    if (Q.ikF_L > 0.5) _exclude.add('FL');
+    if (Q.ikF_R > 0.5) _exclude.add('FR');
+    // the body itself rests on the rug; head and paws may sink a little into the pile, the
+    // tail is ignored. lowestPoint() already includes the current lift, so add it back.
+    const lift = cat.groundLift || 0, target = GROUND_TOP - FUR_SINK;
+    const core = cat.lowestPoint(_exclude, isCore), rest = cat.lowestPoint(_exclude, isLimbOrHead);
+    desired = gw * (Math.max(target - core, target - 0.1 - rest) + lift);
+  }
+  cat.groundLift = damp(cat.groundLift || 0, desired, 12, dt);
+  cat.root.position.y = 0.1 + Q.rootY + cat.groundLift;
 }
 
 function lookLogic(Q, dt) {
@@ -761,7 +799,7 @@ addEventListener('resize', onResize);
 function loop() {
   // cap the frame step; ?debug allows bigger steps so throttled automated browsers keep real time
   const dt = Math.min(clock.getDelta(), DEBUG ? 0.3 : 0.05);
-  update(dt);
+  if (!(DEBUG && window.app?.paused)) update(dt);
   controls.update();
   renderer.render(scene, camera);
   updateEmotes();
