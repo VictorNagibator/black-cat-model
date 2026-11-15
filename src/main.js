@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Cat, BASE } from './cat.js';
-import { POSES, poseOf, both } from './poses.js';
+import { POSES, poseOf, both, GRAPH, TRANSITIONS, groupOf } from './poses.js';
 import { CatAudio } from './audio.js';
 import { Legs } from './legs.js';
 import { makeSock } from './props.js';
@@ -164,55 +164,75 @@ function updateEmotes() {
 const brain = {
   action: null,       // { steps, i, t, name }
   walkTarget: null,
-  walkSpeed: 0, phase: 0,
-  yaw: 0, pos: new THREE.Vector3(),
-  look: { yaw: 0, pitch: 0, target: new THREE.Vector3(), mode: 'camera', lastMouse: -1e9 },
+  walkSpeed: 0,
+  yaw: 0, pos: new THREE.Vector3(), yawRate: 0, prevYaw: 0,
+  look: { yaw: 0, pitch: 0, target: new THREE.Vector3(), lastMouse: -1e9 },
+  gaze: null, nextGaze: 6,                   // looking around at random spots now and then
   blink: 0, nextBlink: 2,
   petting: null, purrUntil: 0,
   idle: 0, nextAuto: 10,
   laser: false, laserState: 'watch', laserStill: 0, laserPrev: new THREE.Vector3(), jump: null,
   extraLook: null,
-  goal: 'stand', path: [], hopT: 0,          // pose transitions
+  goal: 'stand', path: [], trans: null,      // pose transitions
   eye: { yaw: 0, pitch: 0, sy: 0, sp: 0, next: 0.5 }, // saccades
   slowBlink: 0, nextSlowBlink: 9,
-  earT: 4, tailFlick: 0, nextFlick: 5,
+  ear: { t: 4, pulse: 0, side: 1 }, tailFlick: 0, nextFlick: 5,
+  fidget: null, nextFidget: 7,               // small idle habits: lick the lips, sniff the air, shake an ear
   motion: { speed: 0, dir: new THREE.Vector3(0, 0, 1) }, prevPos: new THREE.Vector3(),
 };
 
-// Poses are connected the way a real cat moves between them: to lie down from standing
-// she sits first, to get up from her side she rolls onto her chest first, and so on.
-const POSE_GRAPH = {
-  stand: ['sit', 'sphinx'],
-  sit: ['stand', 'loaf', 'sphinx'],
-  loaf: ['sit', 'sphinx', 'side'],
-  sphinx: ['stand', 'sit', 'loaf', 'side'],
-  side: ['sphinx', 'loaf', 'sleep', 'back'],
-  sleep: ['side'],
-  back: ['side'],
-};
 function posePath(from, to) {
   const prev = { [from]: null }, queue = [from];
   while (queue.length) {
     const n = queue.shift();
     if (n === to) break;
-    for (const m of POSE_GRAPH[n] || []) if (!(m in prev)) { prev[m] = n; queue.push(m); }
+    for (const m of GRAPH[n] || []) if (!(m in prev)) { prev[m] = n; queue.push(m); }
   }
   const path = [];
   for (let n = to; n && n !== from; n = prev[n]) path.unshift(n);
   return path;
 }
+// start the move from the current pose to the next one on the path
+function startHop(next) {
+  const from = poseName;
+  poseName = next;
+  const stages = TRANSITIONS[from + '>' + next] || [{ d: 0.9 }];
+  brain.trans = { from, to: next, t: 0, stages, total: stages.reduce((s, x) => s + x.d, 0) };
+}
 function setPose(name) {
   if (!POSES[name]) return;
   brain.idle = 0;
-  if (name === brain.goal && (poseName === name || brain.path.length)) return;
+  if (name === brain.goal) return;
   brain.goal = name;
+  // a move that has started is finished first, then the cat carries on towards the new pose
   brain.path = posePath(poseName, name);
-  if (brain.path.length) { poseName = brain.path.shift(); brain.hopT = 0; }
+  if (!brain.trans && brain.path.length) startHop(brain.path.shift());
   updateUI();
 }
-const hopsTo = (name) => posePath(brain.goal, name).length + brain.path.length;
+const settled = (name) => poseName === name && !brain.trans && !brain.path.length;
 
-// an action is a list of steps: { d, set, add, fn(t, P), rate, enter(), emote, sound, pose }
+// target parameters of the pose (or of the current stage of a move between two poses)
+function poseTarget(out) {
+  const tr = brain.trans;
+  if (!tr) { Object.assign(out, BASE, POSES[poseName]); return 0; }
+  let acc = 0, stage = tr.stages[tr.stages.length - 1];
+  for (const s of tr.stages) { if (tr.t < acc + s.d) { stage = s; break; } acc += s.d; }
+  const A = poseOf(tr.from), B = poseOf(tr.to);
+  for (const k in B) {
+    const g = GROUP_OF[k] || groupOf(k);
+    const m = stage.mix ? (stage.mix[g] ?? (g === 'face' ? 1 : 0)) : 1;
+    out[k] = A[k] + (B[k] - A[k]) * m;
+  }
+  if (stage.add) for (const k in stage.add) out[k] += stage.add[k];
+  return 3.8;
+}
+const GROUP_OF = {};
+for (const k of Object.keys(BASE)) GROUP_OF[k] = groupOf(k);
+// how quickly each body part follows its target (multiplies the spring time): the face and the
+// head are quick, the body is heavier and the tail follows last
+const LAG = { body: 1, spine: 1, head: 0.75, front: 0.8, hind: 0.8, tail: 1.4, face: 0.55 };
+
+// an action is a list of steps: { d, set, add, fn(t, P), rate, enter(), emote, sound, pose, until() }
 function play(name, steps, opts = {}) {
   brain.action = { name, steps, i: -1, t: 0, ...opts };
   nextStep();
@@ -228,30 +248,40 @@ function nextStep() {
   if (s.sound === 'meow') audio.meow(s.kind);
   if (s.pose) setPose(s.pose);
 }
+// switch to a suitable pose first if needed (the action waits until she is there)
 function needPose(names, steps) {
-  // switch to a suitable pose first if needed
-  if (names.includes(brain.goal) && !brain.path.length) return steps;
-  return [{ d: 0.5 + 0.9 * Math.max(1, hopsTo(names[0])), pose: names[0] }, ...steps];
+  if (names.includes(brain.goal) && settled(brain.goal)) return steps;
+  const name = names.includes(brain.goal) ? brain.goal : names[0];
+  return [{ d: 15, pose: name, until: () => settled(name) }, ...steps];
 }
 
 const R = (a, b) => a + Math.random() * (b - a);
+const smooth01 = (x) => { x = Math.min(1, Math.max(0, x)); return x * x * (3 - 2 * x); };
 const ACTIONS = {
+  // a big yawn: eyes squeeze shut, the head tips up, the mouth opens wide with the tongue
+  // curled, then she licks her lips and blinks
   yawn: () => play('yawn', [
-    { d: 0.5, add: { headPitch: -0.2 }, set: { jaw: 0.35, lidUp: 0.6, earBack: 0.4 } },
-    { d: 1.2, add: { headPitch: -0.38, neckPitch: -0.1 }, set: { jaw: 1, lidUp: 1, lidLow: 0.6, earBack: 0.9, tongueUp: 0.6, whisk: 0.5 }, rate: 6 },
-    { d: 0.35, set: { jaw: 0.1, lidUp: 0.6 }, rate: 8 },
-    { d: 0.45, set: { tongue: 0.25, tongueUp: 0.7, lidUp: 0.45 } },
-    { d: 0.4, set: { lidUp: 0.3 } },
+    { d: 0.45, add: { headPitch: -0.12, neckPitch: -0.05 }, set: { jaw: 0.18, lidUp: 0.55, earBack: 0.25, whisk: 0.2 }, rate: 4 },
+    { d: 1.0, add: { headPitch: -0.34, neckPitch: -0.12, chestBend: -0.04 }, set: { jaw: 1, lidUp: 0.95, lidLow: 0.55, earBack: 0.85, tongueUp: 0.55, whisk: 0.55, look: 0.3 }, rate: 2.6 },
+    { d: 0.35, add: { headPitch: -0.34, neckPitch: -0.12 }, set: { jaw: 1, lidUp: 1, lidLow: 0.6, earBack: 0.9, tongueUp: 0.6, whisk: 0.55, look: 0.3 } },
+    { d: 0.35, set: { jaw: 0.05, lidUp: 0.6, earBack: 0.3 }, rate: 7 },
+    { d: 0.5, set: { tongue: 0.3, tongueUp: 0.7, lidUp: 0.5 }, rate: 6 },
+    { d: 0.45, set: { lidUp: 0.3 } },
   ]),
+  // a meow: the head lifts a little and the mouth opens and closes with the sound
   meow: () => play('meow', [
-    { d: 0.15, add: { headPitch: -0.12 } },
-    { d: 0.55, add: { headPitch: -0.2 }, set: { jaw: 0.55, lidUp: 0.15, pupil: 0.7 }, sound: 'meow', emote: 'e.meow', rate: 10 },
-    { d: 0.4, set: { jaw: 0 } },
+    { d: 0.16, add: { headPitch: -0.1 }, rate: 8 },
+    { d: 0.62, fn: (tt, p) => {
+      const k = Math.sin(Math.PI * Math.min(1, tt / 0.6));
+      p.jaw = 0.52 * Math.pow(Math.max(0, k), 0.7); p.headPitch -= 0.16 + 0.05 * k; p.lidUp = 0.12; p.pupil = 0.65;
+    }, sound: 'meow', emote: 'e.meow', rate: 12 },
+    { d: 0.35 },
   ]),
+  // blep: the tip of the tongue stays out for a while
   blep: () => play('blep', [
-    { d: 0.3, set: { tongue: 0.12 } },
-    { d: 4.0, set: { tongue: 0.34, lidUp: 0.3 }, emote: 'e.blep' },
-    { d: 0.4, set: { tongue: 0 } },
+    { d: 0.35, set: { tongue: 0.3, jaw: 0.015 } },
+    { d: 3.6, set: { tongue: 0.5, jaw: 0.012, lidUp: 0.32 }, add: { headRoll: 0.08 }, emote: 'e.blep' },
+    { d: 0.45, set: { tongue: 0, jaw: 0 } },
   ]),
   // sniff: a sock appears a few steps away; she walks over, leans down and sniffs it, then
   // lifts her head with the mouth slightly open and eyes half closed (the flehmen response
@@ -273,46 +303,56 @@ const ACTIONS = {
   // wash: lick the paw held in front of the mouth, then wipe it over the cheek and ear
   // (the paw is driven by IK towards points in head space, so it never goes through the face)
   wash: () => play('wash', needPose(['sit'], [
-    { d: 0.9, set: { ikF_R: 0, reachR: 1, reachX: -0.06, reachY: -0.46, reachZ: 0.74, reachW: -0.9, look: 0 }, add: { headPitch: 0.3, headYaw: -0.15 }, rate: 4 },
-    { d: 2.4, fn: (t, p) => {
-      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.06, reachY: -0.46 + Math.sin(t * 9) * 0.03, reachZ: 0.74, reachW: -0.9, look: 0 });
-      p.headPitch += 0.3 + Math.sin(t * 9) * 0.07; p.headYaw -= 0.15;
-      p.tongue = 0.3 + Math.max(0, Math.sin(t * 9)) * 0.2; p.tongueUp = 0.35; p.lidUp = 0.65;
+    { d: 0.9, set: { ikF_R: 0, reachR: 1, reachX: -0.03, reachY: -0.33, reachZ: 0.62, reachW: -1.0, look: 0, scY_R: 0.06 }, add: { headPitch: 0.25, headYaw: -0.12 }, rate: 4 },
+    { d: 2.4, fn: (tt, p) => {
+      const lick = Math.sin(tt * 9);
+      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.03, reachY: -0.33 + lick * 0.02, reachZ: 0.62, reachW: -1.0, look: 0, scY_R: 0.06 });
+      p.headPitch += 0.25 + lick * 0.06; p.headYaw -= 0.12; p.neckPitch += 0.05;
+      p.jaw = 0.08 + Math.max(0, lick) * 0.08; p.tongue = 0.32 + Math.max(0, lick) * 0.18; p.tongueUp = 0.35; p.lidUp = 0.65;
     } },
-    { d: 2.6, fn: (t, p) => {
-      const w = 0.5 - 0.5 * Math.cos(t * 4.2);
-      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.42 - 0.22 * w, reachY: -0.16 + 0.34 * w, reachZ: 0.62 - 0.27 * w, reachW: 0.6, look: 0 });
-      p.headPitch += 0.12; p.headYaw -= 0.22; p.headRoll += 0.2 * w;
-      p.lidUp = 0.9; p.lidLow = 0.4; p.earBack = 0.35;
+    { d: 2.6, fn: (tt, p) => {
+      const w = 0.5 - 0.5 * Math.cos(tt * 4.2);
+      Object.assign(p, { ikF_R: 0, reachR: 1, reachX: -0.24 - 0.06 * w, reachY: -0.12 + 0.3 * w, reachZ: 0.46 - 0.24 * w, reachW: 0.5, look: 0, scY_R: 0.06 });
+      p.headPitch += 0.12; p.headYaw -= 0.2; p.headRoll += 0.22 * w;
+      p.lidUp = 0.9; p.lidLow = 0.4; p.earBack = 0.35 + 0.2 * w;
     }, rate: 7 },
     { d: 0.9, set: { reachR: 0 } }, // paw goes back down (IK takes over again)
   ])),
-  stretch: () => play('stretch', needPose(['stand'], [
-    { d: 1.6, set: { fzF: 0.9, fzB: -0.1, torsoY: 1.42, pitch: 0.42, torsoZ: -0.25, flS: -1.15, flE: 0.1, flW: 0.15, blH: -0.25, blK: 0.85, blA: -0.85, tailPitch: 0.2, lidUp: 0.85, jaw: 0.25, neckPitch: -0.75, headPitch: 0.35, earBack: 0.3 }, rate: 3 },
-    { d: 1.0, set: { lidUp: 0.6 } },
-    { d: 1.4, set: { fzF: 0.2, fzB: -0.35, torsoY: 1.65, pitch: -0.18, blH: 0.25, blK: 0.7, blA: -0.6, blH_L: -0.2, blK_L: 0.9, blA_L: -1.1, lidUp: 0.6 }, rate: 3 },
-    { d: 0.5 },
-  ].map(fixBoth))),
+  // stretch: first the front (paws walk forward, chest down, rear and tail up), then the back
+  // (she shifts forward and stretches one hind leg out behind)
+  stretch: () => {
+    // front stretch: forearms flat on the rug far in front, chest down, rear and tail up
+    const front = both({ ikF: 0, flS: -2.0, flE: -0.05, flW: 0, fzF: 0.6, torsoY: 1.32, pitch: 0.45, torsoZ: -0.35, chestBend: 0.1, scY: 0.12, tailPitch: 0.25, tailBendX: 0.06, lidUp: 0.85, jaw: 0.35, neckPitch: 0.05, headPitch: 0.15, earBack: 0.35, blM: -0.5 });
+    play('stretch', needPose(['stand'], [
+      { d: 1.7, set: front, rate: 2.4 },
+      { d: 0.8, set: { ...front, jaw: 0.06, lidUp: 0.6, earBack: 0.2 }, rate: 2.4 },
+      // then she leans forward and stretches one hind leg out behind her, toes spread
+      { d: 1.6, set: { fzF: 0.45, torsoY: 1.6, pitch: 0.1, torsoZ: 0.35, chestBend: 0.04, ikB_R: 0, blH_R: 0.95, blK_R: 0.3, blA_R: -0.15, blP_R: 0.45, tailPitch: -0.25, tailBendX: 0.06, lidUp: 0.6 }, rate: 2.6 },
+      { d: 0.7 },
+    ]));
+  },
   boop: () => { audio.boop(); play('boop', [
-    { d: 0.14, set: { lidUp: 1, lidLow: 0.7, earBack: 0.3 }, add: { headPitch: -0.14 }, emote: 'e.boop', emoteCls: 'big', rate: 25 },
-    { d: 0.3, set: { whisk: 0.4, pupil: 0.8 }, add: { headPitch: -0.06 } },
-    { d: 0.45, set: { tongue: 0.25, tongueUp: 0.75 } },
+    { d: 0.16, set: { lidUp: 1, lidLow: 0.75, earBack: 0.35, whisk: 0.3 }, add: { headPitch: -0.12, neckPitch: -0.12 }, emote: 'e.boop', emoteCls: 'big', rate: 22 },
+    { d: 0.35, set: { whisk: 0.45, pupil: 0.8 }, add: { headPitch: -0.05 }, rate: 8 },
+    { d: 0.5, set: { tongue: 0.3, tongueUp: 0.75 }, rate: 9 },  // licks the nose
   ]); },
+  // touched the tail: ears flatten, a short hiss, the tail lashes
   tail: () => { audio.hiss(); play('tail', [
-    { d: 1.0, set: { tailWave: 0.7, tailWaveSpeed: 5, earBack: 1, lidUp: 0.35, pupil: 0.15 }, emote: 'e.tail', rate: 8 },
-    { d: 0.5, set: { earBack: 0.4 } },
+    { d: 0.3, set: { earBack: 1, lidUp: 0.3, pupil: 0.95, jaw: 0.35, whisk: -0.3 }, add: { neckPitch: -0.15, headPitch: -0.08 }, rate: 14, emote: 'e.tail' },
+    { d: 0.9, set: { tailWave: 0.6, tailWaveSpeed: 5, earBack: 1, lidUp: 0.35, pupil: 0.9, jaw: 0.12 }, rate: 8 },
+    { d: 0.6, set: { earBack: 0.4, tailWave: 0.25, tailWaveSpeed: 3 } },
   ]); },
+  // belly rub while she lies on her back: she grabs the hand and bunny-kicks it
   trap: () => play('trap', [
-    { d: 2.2, fn: (t, p) => {
-      Object.assign(p, both({ flS: -0.45, flE: 2.0, flW: 0.9, flZ: -0.1 }));
-      const k = Math.sin(t * 20);
-      p.blH_L = -0.95 + k * 0.4; p.blH_R = -0.95 - k * 0.4; p.blK_L = 1.3 - k * 0.4; p.blK_R = 1.3 + k * 0.4;
-      p.jaw = 0.3; p.earBack = 1; p.pupil = 0.95; p.headPitch -= 0.2;
+    { d: 2.2, fn: (tt, p) => {
+      Object.assign(p, both({ flS: 0.15, flE: -2.3, flW: 1.5, flZ: -0.12 }));
+      const k = Math.sin(tt * 18);
+      p.blH_L = -1.25 + k * 0.35; p.blH_R = -1.25 - k * 0.35; p.blK_L = 1.9 - k * 0.45; p.blK_R = 1.9 + k * 0.45;
+      p.jaw = 0.35; p.earBack = 0.9; p.pupil = 0.95; p.neckPitch += 0.3; p.chestBend += 0.2;
     }, emote: 'e.trap', rate: 14 },
     { d: 0.6 },
   ]),
 };
-function fixBoth(s) { if (s.set) s.set = both(s.set); return s; }
 
 function forward() { return new THREE.Vector3(Math.sin(brain.yaw), 0, Math.cos(brain.yaw)); }
 
@@ -343,7 +383,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   const hit = pickCat();
   if (hit) {
     controls.enabled = false;
-    pointerDown = { part: hit.object.userData.part, x: e.clientX, y: e.clientY, moved: 0, t: performance.now() };
+    pointerDown = { part: cat.partOf(hit), x: e.clientX, y: e.clientY, moved: 0, t: performance.now() };
     renderer.domElement.setPointerCapture(e.pointerId);
   }
 });
@@ -376,10 +416,19 @@ function clickPart(part) {
   if (brain.jump) return;
   if (part === 'nose') return ACTIONS.boop();
   if (part === 'tail') return ACTIONS.tail();
-  if (poseName === 'back' && (part === 'body' || part === 'paw')) return ACTIONS.trap();
+  if (settled('back') && (part === 'body' || part === 'paw')) return ACTIONS.trap();
   if (poseName === 'sleep') { setPose('side'); emote(t('e.wake')); return; }
-  if (part === 'head') { emote(t('e.chirp')); audio.meow('chirp'); return play('chirp', [{ d: 0.3, set: { jaw: 0.25, lidUp: 0.3 }, add: { headRoll: 0.25 } }, { d: 0.4, add: { headRoll: 0.2 } }]); }
-  if (part === 'paw') { emote('🐾'); return play('paw', [{ d: 0.6, set: { flP_L: 0.6, pupil: 0.8 } }]); }
+  if (part === 'head') { emote(t('e.chirp')); audio.meow('chirp'); return play('chirp', [{ d: 0.3, set: { jaw: 0.22, lidUp: 0.3 }, add: { headRoll: 0.25 }, rate: 9 }, { d: 0.45, add: { headRoll: 0.18 } }]); }
+  if (part === 'paw') {
+    emote('🐾');
+    // she lifts the paw and gives it a little shake
+    if (settled('stand') || settled('sit')) return play('paw', [
+      { d: 0.25, set: { ikF_L: 0, flS_L: -0.25, flE_L: -0.9, flP_L: 0.5, pupil: 0.8 }, rate: 9 },
+      { d: 0.5, fn: (tt, p) => { Object.assign(p, { ikF_L: 0, flS_L: -0.25, flE_L: -0.9, pupil: 0.8 }); p.flP_L = 0.5 + Math.sin(tt * 30) * 0.35; }, rate: 14 },
+      { d: 0.35 },
+    ]);
+    return play('paw', [{ d: 0.6, set: { flP_L: 0.6, pupil: 0.8 } }]);
+  }
   startPet(part); setTimeout(stopPet, 1500);
 }
 function startPet(part) {
@@ -454,7 +503,7 @@ const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3();
 let elapsed = 0;
 
 function damp(cur, target, rate, dt) { return cur + (target - cur) * (1 - Math.exp(-rate * dt)); }
-// critically damped spring (no sudden start, no overshoot); `vel` holds per-key velocities
+// critically damped spring (no sudden start, no overshoot); `VEL` holds per-key velocities
 const VEL = {};
 function spring(key, cur, target, smoothTime, dt) {
   const omega = 2 / smoothTime, x = omega * dt;
@@ -471,13 +520,17 @@ function update(dt) {
   const now = performance.now();
   brain.idle += dt;
 
-  // --- pose transitions: move to the next pose on the path once this one has mostly settled
-  brain.hopT += dt;
-  if (brain.path.length && brain.hopT > 0.8) { poseName = brain.path.shift(); brain.hopT = 0; }
+  // --- pose transitions ---
+  if (brain.trans) {
+    brain.trans.t += dt;
+    if (brain.trans.t >= brain.trans.total) {
+      brain.trans = null;
+      if (brain.path.length) startHop(brain.path.shift());
+    }
+  }
 
-  // --- target pose (+ current action step) ---
-  Object.assign(T, BASE, POSES[poseName]);
-  let rate = 3.2;
+  // --- target pose (+ the stage of a move, + the current action step) ---
+  let rate = poseTarget(T) || 3.2;
   const a = brain.action;
   if (a) {
     const s = a.steps[a.i];
@@ -486,9 +539,10 @@ function update(dt) {
     if (s.fn) s.fn(a.t, T);
     if (s.rate) rate = s.rate;
     a.t += dt;
-    if (a.t >= s.d) nextStep();
+    if (a.t >= s.d || (s.until && a.t > 0.15 && s.until())) nextStep();
     brain.idle = 0;
   }
+  const standing = poseName === 'stand' && !brain.trans;
 
   // --- walking to a target / toy / laser ---
   let moving = 0;
@@ -496,34 +550,24 @@ function update(dt) {
   if (toy) {
     toy.t += dt;
     const d = tmp.copy(toy.p).sub(brain.pos).setY(0);
-    const dist = d.length();
-    if (dist > 2.6) brain.walkTarget = toy.p.clone();
-    else {
-      brain.walkTarget = null;
-      brain.toyChase = null;
-      brain.extraLook = toy.p.clone().setY(0.3);
-      play('toy', [
-        { d: 0.9, set: { pupil: 0.95 }, fn: (t, p) => { p.pelvisRoll = Math.sin(t * 18) * 0.12; p.torsoY = 1.35; p.pitch = 0.12; }, emote: 'e.wiggle' },
-        { d: 0.35, enter: () => { emote(t('e.pounce'), 'big'); }, set: { ikF: 0, flS: -1.0, flE: -0.6, flW: -0.2, jaw: 0.5, earBack: 0.3 }, rate: 14 },
-        { d: 1.6, set: { jaw: 0, lidUp: 0.3 }, fn: (t, p) => { p.headPitch += 0.2; } },
-      ].map(fixBoth), { onDone: () => { brain.extraLook = null; setTimeout(() => setProp(null), 1500); } });
-    }
+    if (d.length() > 2.5) brain.walkTarget = toy.p.clone();
+    else if (standing && !brain.walkTarget) { brain.toyChase = null; pounceToy(toy.p); }
   }
-  if (brain.sniff && !brain.sniff.started && !brain.walkTarget && poseName === 'stand' && !brain.action) startSniff();
+  if (brain.sniff && !brain.sniff.started && !brain.walkTarget && standing && !brain.action) startSniff();
   if (brain.laser) laserLogic(dt);
-  if (brain.walkTarget && poseName === 'stand' && !brain.jump) {
+  if (brain.walkTarget && standing && !brain.jump) {
     const d = tmp.copy(brain.walkTarget).sub(brain.pos).setY(0);
     const dist = d.length();
     const want = Math.atan2(d.x, d.z);
     const diff = angDiff(brain.yaw, want);
-    brain.yaw += THREE.MathUtils.clamp(diff, -2.8 * dt, 2.8 * dt);
-    const stopDist = brain.laser ? 2.2 : toy ? 2.4 : brain.sniff ? 2.75 : 0.3;
+    // turning: quick at first, easing in as she lines up with the target
+    brain.yaw += THREE.MathUtils.clamp(diff * 3, -2.4 * dt, 2.4 * dt) * (dist > 0.6 ? 1 : 0.6);
+    const stopDist = brain.laser ? 2.2 : toy ? 2.3 : brain.sniff ? 2.75 : 0.3;
     if (dist > stopDist) {
-      const sp = (Math.abs(diff) < 0.8 ? 1 : 0.35) * (brain.laser ? 2.6 : 1.9);
-      moving = Math.min(1, (dist - stopDist) * 2 + 0.3);
+      const sp = (Math.abs(diff) < 0.6 ? 1 : Math.abs(diff) < 1.4 ? 0.55 : 0.25) * (brain.laser ? 2.4 : 1.7);
+      moving = Math.min(1, (dist - stopDist) * 1.5 + 0.25);
       brain.pos.addScaledVector(forward(), sp * moving * dt);
     } else if (Math.abs(diff) < 0.1 && !brain.laser) brain.walkTarget = null;
-    else moving = Math.abs(diff) > 0.15 ? 0.4 : 0;
     brain.idle = 0;
   } else if (brain.walkTarget && poseName !== 'stand' && !brain.jump) {
     if (!a && brain.goal !== 'stand') setPose('stand');
@@ -533,34 +577,28 @@ function update(dt) {
   brain.walkSpeed = damp(brain.walkSpeed, moving, 6, dt);
 
   // --- pounce ---
-  if (brain.jump) {
-    const j = brain.jump; j.t += dt;
-    const k = Math.min(1, j.t / j.dur);
-    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-    brain.pos.lerpVectors(j.from, j.to, e);
-    T.rootY = Math.sin(k * Math.PI) * 1.1;
-    Object.assign(T, both({ ikF: 0, ikB: 0, flS: -1.2 + k * 1.2, flE: -0.3 - k * 0.3, flW: 0, blH: 0.5 - k * 0.6, blK: 0.4 + k * 0.8, blA: -0.4 - k * 0.5 }));
-    T.pitch = -0.25 + k * 0.4; T.tailPitch = 0.1; T.pupil = 1; T.earBack = 0.4;
-    rate = 14;
-    if (k >= 1) { brain.jump = null; emote([t('e.pounce'), t('e.caught'), '???'][Math.floor(R(0, 3))], 'big'); brain.laserState = 'land'; brain.landT = 0; }
-  }
+  if (brain.jump) jumpLogic(dt);
 
   // --- petting ---
   if (brain.petting) {
     const pt = brain.petting; pt.t += dt; pt.heart -= dt;
     T.lidUp = Math.max(T.lidUp, 0.72); T.lidLow = Math.max(T.lidLow, 0.3);
     T.earBack = 0.25; T.pupil = 0.3; T.look = 0.2;
-    if (pt.part === 'head') { T.headRoll += pt.dx * 0.35 + Math.sin(pt.t * 2) * 0.08; T.headPitch -= 0.12; T.neckYaw += pt.dx * 0.2; }
-    else if (poseName === 'stand') { T.tailPitch += 1.2; T.tailBendX = -0.04; T.chestBend -= 0.08; T.pelvisBend += 0.1; T.torsoY += 0.08; }
-    else { T.tailWave = 0.05; }
+    if (pt.part === 'head') {
+      // she pushes her head into the hand and follows it
+      T.headRoll += pt.dx * 0.35 + Math.sin(pt.t * 2) * 0.08; T.headPitch -= 0.14; T.neckPitch -= 0.1; T.neckYaw += pt.dx * 0.25;
+    } else if (settled('stand')) {
+      // stroked along the back: the back rises into the hand, the tail goes straight up
+      T.tailPitch = 1.35; T.tailBendX = -0.05; T.tailCurl = 0.6; T.chestBend -= 0.06; T.pelvisBend += 0.1; T.torsoY += 0.08; T.blM_L = T.blM_R = -0.15;
+    } else { T.tailWave = 0.05; }
     if (pt.heart <= 0) { emote(Math.random() < 0.7 ? '❤' : t('e.purr'), 'heart'); pt.heart = R(0.5, 0.9); }
     brain.idle = 0;
   } else if (brain.purrUntil && now > brain.purrUntil) { audio.purr(false); brain.purrUntil = 0; }
 
-  // --- smooth towards the target ---
+  // --- smooth towards the target, each body part at its own pace ---
   for (const k in T) {
     if (k === 'rootY' && brain.jump) { P[k] = T[k]; VEL[k] = 0; continue; }
-    P[k] = spring(k, P[k], T[k], 1.15 / rate, dt);
+    P[k] = spring(k, P[k], T[k], (1.15 / rate) * (LAG[GROUP_OF[k] || groupOf(k)] || 1), dt);
   }
 
   // --- walk cycle (additive) ---
@@ -572,44 +610,64 @@ function update(dt) {
   M.speed = damp(M.speed, spd, 10, dt);
   if (spd > 0.05) M.dir.copy(moved).normalize();
   else M.dir.set(Math.sin(brain.yaw), 0, Math.cos(brain.yaw));
-  const ws = Math.min(1, M.speed / 1.6);
+  const ws = Math.min(1, M.speed / 1.5);
   if (ws > 0.02) {
-    // body rides a little lower when walking, rolls with the steps, head stays steady
+    // the body rides a little lower and bobs twice per stride, the trunk rolls and bends from
+    // side to side with the steps, the head is carried a little low and kept level
     const ph = legs.phase * Math.PI * 2;
-    Q.torsoY += -0.05 * ws + Math.sin(ph * 2) * 0.025 * ws;
-    Q.chestRoll += Math.sin(ph + 1.6) * 0.035 * ws;
-    Q.pelvisRoll += Math.sin(ph) * 0.045 * ws;
-    Q.chestYaw += Math.sin(ph + 1.6) * 0.04 * ws;
-    Q.headPitch -= Math.sin(ph * 2) * 0.02 * ws;
-    Q.neckPitch += 0.12 * ws;
-    Q.tailPitch += 0.1 * ws; Q.tailBendX += 0.035 * ws; // relaxed tail with a soft upward curve
-    Q.tailWave = Math.max(Q.tailWave, 0.16 * ws);
+    Q.torsoY += (-0.04 + Math.sin(ph * 2 - 0.6) * 0.02) * ws;
+    Q.pitch += Math.sin(ph * 2 + 0.9) * 0.012 * ws;
+    Q.chestRoll += Math.sin(ph + 1.6) * 0.03 * ws;
+    Q.pelvisRoll += Math.sin(ph) * 0.04 * ws;
+    Q.chestYaw += Math.sin(ph + 1.6) * 0.03 * ws;
+    Q.pelvisYaw += Math.sin(ph) * 0.035 * ws;
+    Q.neckPitch += 0.08 * ws; Q.headPitch -= 0.04 * ws - Math.sin(ph * 2 - 0.6) * 0.015 * ws;
+    Q.tailPitch += 0.12 * ws; Q.tailBendX += 0.02 * ws;
+    Q.tailWave = Math.max(Q.tailWave, 0.1 * ws);
   }
+  // shoulder blades: they swing with the front legs and rise while the leg carries weight
+  for (const side of ['L', 'R']) {
+    const f = legs.feet['F' + side];
+    const w = Math.min(1, ws * 1.5) * (Q['ikF_' + side] > 0.5 ? 1 : 0);
+    if (w < 0.01) continue;
+    const u = f.lastLocal, duty = 0.62;
+    const pos = u < duty ? 1 - 2 * u / duty : -1 + 2 * (u - duty) / (1 - duty); // paw fore (+) / aft (-)
+    Q['scR_' + side] += -0.13 * pos * w;
+    Q['scY_' + side] += (u < duty ? Math.sin(Math.PI * u / duty) : 0) * 0.035 * w;
+  }
+  // turning: the spine bends into the turn and the head leads
+  brain.yawRate = damp(brain.yawRate, angDiff(brain.prevYaw, brain.yaw) / Math.max(dt, 1e-4), 8, dt);
+  brain.prevYaw = brain.yaw;
+  const turn = THREE.MathUtils.clamp(brain.yawRate, -2.5, 2.5);
+  Q.chestYaw += turn * 0.1; Q.pelvisYaw -= turn * 0.07; Q.headYaw += turn * 0.08;
 
   // --- idle life: weight shifts, small head movements, ear twitches, tail-tip flicks
-  const calm = !brain.petting && !brain.laser && ws < 0.05;
-  if (calm && (poseName === 'stand' || poseName === 'sit' || poseName === 'loaf' || poseName === 'sphinx')) {
+  const calm = !brain.petting && !brain.laser && ws < 0.05 && !brain.jump;
+  if (calm && !brain.trans && (poseName === 'stand' || poseName === 'sit' || poseName === 'loaf' || poseName === 'sphinx')) {
     Q.pelvisRoll += Math.sin(elapsed * 0.37) * 0.025;
     Q.chestRoll += Math.sin(elapsed * 0.29 + 1.3) * 0.02;
-    Q.torsoZ += Math.sin(elapsed * 0.21) * 0.03;
-    Q.headYaw += (Math.sin(elapsed * 0.53) + Math.sin(elapsed * 1.31 + 2)) * 0.025;
+    Q.torsoZ += Math.sin(elapsed * 0.21) * 0.025;
+    Q.headYaw += (Math.sin(elapsed * 0.53) + Math.sin(elapsed * 1.31 + 2)) * 0.02;
     Q.headPitch += Math.sin(elapsed * 0.71 + 0.5) * 0.02;
     Q.headRoll += Math.sin(elapsed * 0.43 + 1) * 0.03;
   }
-  brain.earT -= dt;
-  if (brain.earT < 0) { brain.earT = R(3, 9); brain.earPulse = 1; }
-  brain.earPulse = Math.max(0, (brain.earPulse || 0) - dt * 6);
-  Q.earBack += Math.sin(brain.earPulse * Math.PI) * 0.35;
+  fidgets(Q, dt, calm && !a);
+  const E = brain.ear;
+  E.t -= dt;
+  if (E.t < 0) { E.t = R(2.5, 8); E.pulse = 1; E.side = Math.random() < 0.5 ? 1 : -1; }
+  E.pulse = Math.max(0, E.pulse - dt * 5);
+  Q.earFlick += Math.sin(E.pulse * Math.PI) * 0.9 * E.side;
   brain.nextFlick -= dt;
   if (brain.nextFlick < 0) { brain.nextFlick = R(4, 11); brain.tailFlick = 1; }
   brain.tailFlick = Math.max(0, brain.tailFlick - dt * 1.2);
-  Q.tailWave += brain.tailFlick * 0.25;
+  Q.tailWave += brain.tailFlick * 0.22;
 
-  // --- breathing ---
-  const br = Math.sin(elapsed * (poseName === 'sleep' ? 1.6 : 2.4));
-  cat.breath = br * 0.018;
-  if (poseName === 'back' && !a) Q.roll += Math.sin(elapsed * 0.9) * 0.12;
-  if (brain.petting || (brain.purrUntil && now < brain.purrUntil)) Q.torsoY += Math.sin(elapsed * 160) * 0.002;
+  // --- breathing: slow and deep when asleep, quicker when purring ---
+  const purring = brain.petting || (brain.purrUntil && now < brain.purrUntil);
+  brain.breathPh = (brain.breathPh || 0) + dt * (poseName === 'sleep' ? 1.5 : purring ? 3 : 2.3);
+  cat.breath = Math.sin(brain.breathPh) * (poseName === 'sleep' ? 0.028 : 0.018);
+  if (settled('back') && !a) Q.roll += Math.sin(elapsed * 0.9) * 0.08;
+  if (purring) Q.torsoY += Math.sin(elapsed * 160) * 0.002;
 
   // --- blinking ---
   brain.nextBlink -= dt;
@@ -634,12 +692,13 @@ function update(dt) {
   cat.root.rotation.y = brain.yaw;
   cat.apply(Q, dt);
   groundContact(Q, dt);
+  cat.tailDynamics(dt, Q.tailRest);
   legs.update(dt, Q, M);
   cat.applyLegs(Q);
   updateContact();
 
   // sleeping: Zzz
-  if (poseName === 'sleep') {
+  if (settled('sleep')) {
     brain.zzz = (brain.zzz || 0) - dt;
     if (brain.zzz < 0) { emote(t('e.zzz'), 'zzz'); brain.zzz = 2.6; }
   }
@@ -647,55 +706,109 @@ function update(dt) {
   autonomy(dt);
 }
 
-// Keep the body resting on the rug: whenever the hind paws are not planted by the IK (sitting,
-// lying, sleeping...), shift the whole cat so its lowest point just touches the floor (sinking
-// a little into the fur), instead of floating above it or dipping under it.
+// Small habits while idle: licking the lips, sniffing the air, a quick ear shake.
+function fidgets(Q, dt, allowed) {
+  if (!brain.fidget) {
+    brain.nextFidget -= dt;
+    if (brain.nextFidget < 0 && allowed && poseName !== 'sleep') {
+      brain.fidget = { kind: ['lick', 'sniff', 'sniff', 'shake'][Math.floor(R(0, 4))], t: 0 };
+      brain.nextFidget = R(6, 14);
+    }
+    return;
+  }
+  const f = brain.fidget; f.t += dt;
+  if (f.kind === 'lick') {
+    // the tongue darts out over the upper lip, once or twice
+    const k = Math.max(0, Math.sin(f.t * 14)) * (f.t < 0.45 ? 1 : 0);
+    Q.tongue = Math.max(Q.tongue, 0.32 * k); Q.tongueUp = Math.max(Q.tongueUp, 0.8 * k); Q.jaw = Math.max(Q.jaw, 0.06 * k);
+    if (f.t > 0.5) brain.fidget = null;
+  } else if (f.kind === 'sniff') {
+    // the head lifts a little, the nose twitches, whiskers come forward
+    const e = Math.sin(Math.PI * Math.min(1, f.t / 1.4));
+    Q.headPitch -= 0.12 * e; Q.neckPitch -= 0.06 * e; Q.whisk += 0.35 * e;
+    Q.headPitch += Math.sin(f.t * 30) * 0.012 * e;
+    if (f.t > 1.4) brain.fidget = null;
+  } else {
+    // a quick shake of the head
+    const e = f.t < 0.4 ? Math.sin(f.t * 45) * (1 - f.t / 0.4) : 0;
+    Q.headRoll += e * 0.25; Q.headYaw += e * 0.08; Q.earBack += Math.abs(e) * 0.3;
+    if (f.t > 0.45) brain.fidget = null;
+  }
+}
+
+// Keep the body resting on the rug. When the paws are not carrying her (sitting on the heels,
+// lying, sleeping...) the whole cat is shifted so its lowest point just touches the floor
+// (sinking a little into the pile) instead of floating above it or dipping under it; while the
+// hind paws are planted by the IK the body is only ever pushed up out of the rug.
 const GROUND_TOP = 0.12, FUR_SINK = 0.05;
 const _exclude = new Set();
-const isCore = (m) => m.userData.part === 'body';
-const isLimbOrHead = (m) => m.userData.part !== 'body' && m.userData.part !== 'tail';
 function groundContact(Q, dt) {
-  const gw = brain.jump ? 0 : 1 - Math.min(1, Math.max(Q.ikB_L, Q.ikB_R));
   let desired = 0;
-  if (gw > 0.01) {
+  if (!brain.jump) {
     cat.root.updateMatrixWorld(true);
     _exclude.clear();
-    if (Q.ikF_L > 0.5) _exclude.add('FL');
-    if (Q.ikF_R > 0.5) _exclude.add('FR');
-    // the body itself rests on the rug; head and paws may sink a little into the pile, the
-    // tail is ignored. lowestPoint() already includes the current lift, so add it back.
+    for (const [id, k] of [['FL', 'ikF_L'], ['FR', 'ikF_R'], ['BL', 'ikB_L'], ['BR', 'ikB_R']]) if (Q[k] > 0.5) _exclude.add(id);
+    // the body rests on the rug or on the legs folded under it; head and paws may sink a
+    // little into the pile, the tail is ignored. The lowest points already include the current
+    // lift, so add it back.
     const lift = cat.groundLift || 0, target = GROUND_TOP - FUR_SINK;
-    const core = cat.lowestPoint(_exclude, isCore), rest = cat.lowestPoint(_exclude, isLimbOrHead);
-    desired = gw * (Math.max(target - core, target - 0.1 - rest) + lift);
+    const { core, rest } = cat.lowestPoints(_exclude);
+    const need = Math.max(target - core, target - 0.03 - rest) + lift;
+    const free = 1 - Math.min(1, Math.max(Q.ikB_L, Q.ikB_R));
+    desired = free * need + (1 - free) * Math.max(0, need);
   }
   cat.groundLift = damp(cat.groundLift || 0, desired, 12, dt);
   cat.root.position.y = 0.1 + Q.rootY + cat.groundLift;
 }
 
-const SNIFF_LEAN = (p) => ({ torsoY: p.torsoY - 0.36, pitch: p.pitch + 0.24, fzF: p.fzF + 0.3, neckPitch: p.neckPitch + 1.5, headPitch: p.headPitch + 0.2 });
+// sniffing the sock: lean down, nose to the sock
+const SNIFF_LEAN = (p) => ({ torsoY: p.torsoY - 0.3, pitch: p.pitch + 0.16, fzF: p.fzF + 0.22, neckPitch: p.neckPitch + 1.2, headPitch: p.headPitch + 0.3, blM_L: -0.5, blM_R: -0.5 });
 function startSniff() {
   const sn = brain.sniff; sn.started = true;
   play('sniff', [
     // lean down towards the sock: front end lowered, neck stretched down, nose to the sock
-    { d: 0.9, set: { pupil: 0.8, whisk: 0.4, look: 0.3 }, fn: (t, p) => { Object.assign(p, SNIFF_LEAN(p)); }, rate: 3.5 },
+    { d: 1.0, set: { pupil: 0.8, whisk: 0.4, look: 0.3 }, fn: (tt, p) => { Object.assign(p, SNIFF_LEAN(p)); }, rate: 3.2 },
     // sniff: quick little nose movements, whiskers forward
-    { d: 1.9, fn: (t, p) => {
+    { d: 1.9, fn: (tt, p) => {
       Object.assign(p, SNIFF_LEAN(p)); p.look = 0.3;
-      p.whisk = 0.65; p.headPitch += Math.sin(t * 34) * 0.03; p.earBack = 0.1;
+      p.whisk = 0.65; p.headPitch += Math.sin(tt * 34) * 0.025; p.earBack = 0.1;
     }, emote: 'e.sniff' },
     // straighten up and lift the head
-    { d: 0.7, enter: () => { brain.extraLook = null; }, set: { jaw: 0.08, whisk: 0.3, look: 0 }, add: { headPitch: -0.22, neckPitch: -0.25 }, rate: 4 },
+    { d: 0.7, enter: () => { brain.extraLook = null; }, set: { jaw: 0.08, whisk: 0.3, look: 0 }, add: { headPitch: -0.2, neckPitch: -0.25 }, rate: 4 },
     // flehmen: mouth slightly open, eyes half closed, a short pause
     { d: 2.4, set: { jaw: 0.3, lidUp: 0.6, lidLow: 0.3, whisk: 0.35, earBack: 0.3, pupil: 0.5, look: 0 }, add: { headPitch: -0.3, neckPitch: -0.25 }, emote: '😮', rate: 5 },
     // close the mouth and lick the nose
-    { d: 0.55, set: { jaw: 0, tongue: 0.25, tongueUp: 0.7 } },
+    { d: 0.55, set: { jaw: 0, tongue: 0.3, tongueUp: 0.75 } },
     { d: 0.3, enter: () => { brain.sniff = null; setTimeout(() => { if (prop === sn.sock) setProp(null); }, 6000); } },
   ]);
+}
+
+// the toy mouse: she crouches, wiggles her rear, pounces on it and gives it a swat
+function pounceToy(p) {
+  brain.extraLook = p.clone().setY(0.3);
+  play('toy', [
+    { d: 1.0, fn: (tt, q) => {
+      q.torsoY -= 0.45; q.pitch += 0.08; q.fzF += 0.2; q.neckPitch += 0.15; q.headPitch -= 0.1; q.scY_L += 0.08; q.scY_R += 0.08;
+      q.pelvisRoll = Math.sin(tt * 17) * 0.1 * Math.min(1, tt * 2); q.pupil = 0.95; q.earBack = 0.15;
+      q.tailPitch = -0.2; q.tailWave = 0.3; q.tailWaveSpeed = 3;
+    }, emote: 'e.wiggle', rate: 6 },
+    { d: 0.3, enter: () => { emote(t('e.pounce'), 'big'); }, set: both({ ikF: 0, flS: -1.15, flE: -0.45, flW: 0.2, jaw: 0.45, earBack: 0.2 }), add: { torsoZ: 0.35, pitch: -0.12 }, rate: 14 },
+    { d: 0.45, set: { ikF_R: 0, flS_R: -0.2, flE_R: -1.1, flP_R: 0.5, jaw: 0.1 }, add: { neckPitch: 0.35, headPitch: 0.15 }, rate: 10 },
+    { d: 1.2, set: { lidUp: 0.3 }, add: { neckPitch: 0.3 } },
+  ], { onDone: () => { brain.extraLook = null; setTimeout(() => setProp(null), 1500); } });
 }
 
 function lookLogic(Q, dt) {
   const L = brain.look;
   let target = null;
+  // now and then she looks around at something else for a moment
+  brain.nextGaze -= dt;
+  if (brain.nextGaze < 0) {
+    brain.nextGaze = R(5, 12);
+    const a = brain.yaw + R(-1.4, 1.4), r = R(2.5, 7);
+    brain.gaze = { p: new THREE.Vector3(brain.pos.x + Math.sin(a) * r, R(0.1, 2.5), brain.pos.z + Math.cos(a) * r), t: R(1.2, 2.8) };
+  }
+  if (brain.gaze && (brain.gaze.t -= dt) < 0) brain.gaze = null;
   if (brain.extraLook) target = brain.extraLook;
   else if (brain.laser && laserDot.visible) target = laserDot.position;
   else if (brain.toyChase) target = brain.toyChase.p;
@@ -704,7 +817,9 @@ function lookLogic(Q, dt) {
     cat.head.getWorldPosition(tmp2);
     const dist = camera.position.distanceTo(tmp2);
     target = raycaster.ray.at(dist * 0.85, tmp);
-  } else target = camera.position;
+  } else if (brain.gaze) target = brain.gaze.p;
+  else if (brain.walkTarget && brain.walkSpeed > 0.2) target = tmp.copy(brain.walkTarget).setY(1.5);
+  else target = camera.position;
   let yaw = 0, pitch = 0;
   const w = Q.look;
   if (target && w > 0) {
@@ -718,6 +833,7 @@ function lookLogic(Q, dt) {
     yaw = THREE.MathUtils.clamp(yaw, -1.25, 1.25);
     pitch = THREE.MathUtils.clamp(pitch, -0.9, 0.7);
   }
+  // the head follows the gaze target smoothly (a little behind the eyes)
   L.yaw = damp(L.yaw, yaw * w, 4, dt);
   L.pitch = damp(L.pitch, pitch * w, 4, dt);
   Q.lookYaw = L.yaw; // applied around the world vertical in cat.turnHead()
@@ -742,6 +858,29 @@ function lookLogic(Q, dt) {
   }
 }
 
+// The leap at the laser dot: launch from the hind legs with the front legs reaching forward,
+// fly stretched out, land on the front paws first and let the body follow.
+function jumpLogic(dt) {
+  const j = brain.jump; j.t += dt;
+  const k = Math.min(1, j.t / j.dur);
+  const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+  brain.pos.lerpVectors(j.from, j.to, e);
+  T.rootY = Math.sin(k * Math.PI) * 0.95;
+  const launch = smooth01(1 - k / 0.25), land = smooth01((k - 0.65) / 0.35);
+  Object.assign(T, both({ ikF: 0, ikB: 0 }));
+  for (const s of ['L', 'R']) {
+    T['flS_' + s] = THREE.MathUtils.lerp(-1.35, -0.15, land) + launch * 0.3;
+    T['flE_' + s] = THREE.MathUtils.lerp(-0.25, -0.5, land);
+    T['flW_' + s] = 0.15;
+    T['blH_' + s] = THREE.MathUtils.lerp(0.75, -0.9, land) + launch * 0.2;
+    T['blK_' + s] = THREE.MathUtils.lerp(0.45, 1.6, land);
+    T['blA_' + s] = THREE.MathUtils.lerp(-0.25, -1.2, land);
+  }
+  T.pitch = -0.3 * launch + 0.25 * land; T.chestBend = 0.08 - 0.15 * launch; T.pelvisBend = -0.08 * (1 - land);
+  T.tailPitch = -0.05; T.tailBendX = 0.02; T.pupil = 1; T.earBack = 0.35; T.neckPitch = -0.1; T.jaw = 0.15 * (1 - land);
+  if (k >= 1) { brain.jump = null; emote([t('e.pounce'), t('e.caught'), '???'][Math.floor(R(0, 3))], 'big'); brain.laserState = 'land'; brain.landT = 0; }
+}
+
 function laserLogic(dt) {
   if (brain.jump) return;
   const dot = laserDot.position;
@@ -754,37 +893,39 @@ function laserLogic(dt) {
   const d = tmp.copy(dot).sub(brain.pos).setY(0);
   const dist = d.length();
   if (brain.laserState === 'land') {
+    // after landing: nose down at the paws, looking for the dot
     brain.landT += dt;
-    T.headPitch += 0.5; T.neckPitch += 0.3; T.flS_L -= 0.3;
+    T.headPitch += 0.4; T.neckPitch += 0.4; T.fzF += 0.15;
     if (brain.landT > 1.2) brain.laserState = 'watch';
     return;
   }
   if (brain.goal !== 'stand') setPose('stand');
-  if (poseName !== 'stand') return;
+  if (!settled('stand')) return;
   const want = Math.atan2(d.x, d.z);
   const diff = angDiff(brain.yaw, want);
   if (dist > 4.6) { brain.walkTarget = dot.clone(); brain.crouch = 0; brain.laserState = 'watch'; return; }
   brain.walkTarget = null;
   // turn towards the dot
-  brain.yaw += THREE.MathUtils.clamp(diff, -2.2 * dt, 2.2 * dt);
-  if (Math.abs(diff) > 0.4) { brain.walkSpeed = Math.max(brain.walkSpeed, 0.3); return; }
-  // crouch and wiggle the butt
+  brain.yaw += THREE.MathUtils.clamp(diff * 3, -2.2 * dt, 2.2 * dt);
+  if (Math.abs(diff) > 0.4) return;
+  // crouch low with the shoulder blades up, tail low and twitching, then wiggle the rear
   brain.crouch = Math.min(1, (brain.crouch || 0) + dt * 2);
   const c = brain.crouch;
-  T.torsoY -= 0.62 * c; T.pitch += 0.1 * c; T.fzF += 0.25 * c; T.fzB += 0.1 * c;
-  T.neckPitch += 0.25 * c; T.headPitch -= 0.2 * c;
-  T.earBack = 0.2 * c; T.tailPitch = -0.15; T.tailWave = 0.35; T.tailWaveSpeed = 3;
-  T.pelvisRoll = Math.sin(elapsed * 16) * 0.14 * (brain.laserStill > 0.3 ? 1 : 0.3);
+  T.torsoY -= 0.62 * c; T.pitch += 0.06 * c; T.fzF += 0.25 * c; T.fzB += 0.1 * c;
+  T.scY_L += 0.1 * c; T.scY_R += 0.1 * c; T.blM_L = T.blM_R = -0.3 - 0.5 * c;
+  T.neckPitch += 0.2 * c; T.headPitch -= 0.15 * c;
+  T.earBack = 0.15 * c; T.tailPitch = -0.2; T.tailWave = 0.3; T.tailWaveSpeed = 3;
+  T.pelvisRoll = Math.sin(elapsed * 16) * 0.12 * (brain.laserStill > 0.3 ? 1 : 0.3);
   if (brain.laserStill > 0.75 && dist > 1.6 && c > 0.9) {
     const to = dot.clone().setY(0).sub(forward().multiplyScalar(1.7));
-    brain.jump = { from: brain.pos.clone(), to, t: 0, dur: 0.55 };
+    brain.jump = { from: brain.pos.clone(), to, t: 0, dur: 0.6 };
     legs.release();
     brain.crouch = 0; brain.laserStill = -1;
   }
 }
 
 function autonomy(dt) {
-  if (!brain.life || brain.action || brain.petting || brain.laser || brain.walkTarget || brain.toyChase || brain.jump || brain.sniff) return;
+  if (!brain.life || brain.action || brain.petting || brain.laser || brain.walkTarget || brain.toyChase || brain.jump || brain.sniff || brain.trans) return;
   if (brain.idle < brain.nextAuto) return;
   brain.idle = 0;
   brain.nextAuto = R(7, 14);
@@ -829,5 +970,5 @@ $('#loading')?.remove();
 if (DEBUG) {
   // step(sec): advance the simulation deterministically and render (handy when the tab is throttled)
   const step = (sec) => { for (let t = 0; t < sec; t += 1 / 30) update(1 / 30); controls.update(); renderer.render(scene, camera); };
-  window.app = { cat, P, brain, setPose, ACTIONS, camera, controls, renderer, scene, POSES, step };
+  window.app = { cat, P, T, brain, legs, setPose, ACTIONS, camera, controls, renderer, scene, POSES, step, update };
 }

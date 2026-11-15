@@ -4,11 +4,12 @@
 // and the joint angles are solved so the paw stays put while the body moves above it.
 // Paws only move when they take a step: either as part of the walk cycle (a lateral-sequence
 // gait: hind-left, fore-left, hind-right, fore-right) or, when standing, once the body has
-// drifted or turned too far from where the paw was planted.
+// drifted or turned too far from where the paw was planted (so she shuffles her paws when she
+// sits down, stretches or turns on the spot).
 import * as THREE from 'three';
 
 const GROUND = 0.12;              // world height of the rug surface
-const CLEAR = { F: 0.115, B: 0.11 }; // wrist / foot joint height above the floor when planted
+const CLEAR = { F: 0.27, B: 0.115 }; // wrist / foot joint height above the floor when planted
 const GAIT = { BL: 0, FL: 0.25, BR: 0.5, FR: 0.75 };
 const DUTY = 0.62;                // fraction of the cycle a paw spends on the ground
 
@@ -38,6 +39,15 @@ export class Legs {
     }
     this._v = new THREE.Vector3();
     this._w = new THREE.Vector3();
+    this._s = new THREE.Vector3();
+    // where each paw rests relative to its shoulder / hip in the bind pose
+    const W = (o) => cat.root.worldToLocal(o.getWorldPosition(new THREE.Vector3()));
+    cat.root.updateMatrixWorld(true);
+    this.homeOff = {};
+    for (const s of ['L', 'R']) {
+      this.homeOff['F' + s] = W(cat.fl[s].wr).z - W(cat.fl[s].sh).z;
+      this.homeOff['B' + s] = W(cat.bl[s].ft).z - W(cat.bl[s].hp).z;
+    }
   }
 
   // drop all planted positions (e.g. after a jump or a pose without IK)
@@ -103,12 +113,20 @@ export class Legs {
     if ((Q.reachR || 0) > 0.01) this.reach('R', Q, Q.reachR);
   }
 
+  // shoulder joint in chest space (it rides on the shoulder blade)
+  shoulder(side) {
+    const L = this.cat.fl[side];
+    L.scap.updateMatrix();
+    return this._s.set(0, -this.cat.legLen.scap, 0).applyMatrix4(L.scap.matrix);
+  }
+
   // front paw reaching for a point given in head space (used for washing the face)
   reach(side, Q, w) {
     const cat = this.cat, L = cat.fl[side], [L1, L2] = cat.legLen.F;
-    const tw = cat.head.localToWorld(this._w.set(Q.reachX, Q.reachY, Q.reachZ));
+    const tw = cat.headGeo.localToWorld(this._w.set(Q.reachX, Q.reachY, Q.reachZ));
     const t = cat.chest.worldToLocal(tw.clone());
-    const dx = t.x - L.sh.position.x, dy = t.y - L.sh.position.y, dz = t.z - L.sh.position.z;
+    const sp = this.shoulder(side);
+    const dx = t.x - sp.x, dy = t.y - sp.y, dz = t.z - sp.z;
     const D = Math.max(1e-3, Math.hypot(dx, dy, dz));
     // swing the leg sideways towards the target, then solve the rest in the leg plane
     const rz = Math.asin(clamp(dx / D, -0.85, 0.85));
@@ -127,8 +145,9 @@ export class Legs {
     // project the shoulder / hip onto the floor in the root frame
     const p = joint.getWorldPosition(this._w);
     cat.root.worldToLocal(p);
-    p.x *= f.front ? 0.92 : 0.88;
-    p.z += f.front ? Q.fzF - 0.3 : Q.fzB - 0.02; // front paws sit under the elbow, not the shoulder
+    p.x *= f.front ? 0.95 : 0.92;
+    // front paws sit under the elbow, hind paws a little ahead of the hip
+    p.z += this.homeOff[f.id] + (f.front ? Q.fzF : Q.fzB);
     p.y = 0;
     cat.root.localToWorld(p);
     p.y = GROUND + CLEAR[f.front ? 'F' : 'B'];
@@ -145,9 +164,10 @@ export class Legs {
     const cat = this.cat;
     const lerp = THREE.MathUtils.lerp;
     if (f.front) {
-      const L = cat.fl[f.side], [L1, L2] = cat.legLen.F;
+      const [L1, L2] = cat.legLen.F;
       const t = cat.chest.worldToLocal(targetWorld.clone());
-      const [s, e] = twoBone(L.sh.position.y, L.sh.position.z, t.y, t.z, L1, L2, true);
+      const sp = this.shoulder(f.side);
+      const [s, e] = twoBone(sp.y, sp.z, t.y, t.z, L1, L2, true);
       const k = '_' + f.side;
       Q['flS' + k] = lerp(Q['flS' + k], s, w);
       Q['flE' + k] = lerp(Q['flE' + k], e, w);
@@ -156,9 +176,10 @@ export class Legs {
     } else {
       const B = cat.bl[f.side], [L1, L2, L3] = cat.legLen.B;
       const t = cat.pelvis.worldToLocal(targetWorld.clone());
-      // the metatarsus stays close to vertical, slightly raked forward; it flexes during a step
+      // the metatarsus keeps the angle blM (close to upright when standing, flat on the rug when
+      // she sits on her heels); it flexes during a step
       const parentPitch = Q.pitch + Q.pelvisBend;
-      const aMeta = -0.22 + lift * 0.9 - parentPitch;
+      const aMeta = Q['blM_' + f.side] + lift * 0.9 - parentPitch;
       const hy = t.y + L3 * Math.cos(aMeta), hz = t.z + L3 * Math.sin(aMeta);
       const [h, k2] = twoBone(B.hp.position.y, B.hp.position.z, hy, hz, L1, L2, false);
       const k = '_' + f.side;
