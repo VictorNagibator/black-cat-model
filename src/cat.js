@@ -38,12 +38,23 @@ float furHash(vec3 p){ p = fract(p*0.3183099+.1); p*=17.0; return fract(p.x*p.y*
         vec3 f = fract(q) - 0.5 - jit * 0.4;
         if (uFurH > 0.0) {
           float rad = 0.62 * pow(1.0 - uFurH, 0.6);
-          if (uFurH > 0.35 + 0.65 * hh || length(f) > rad || uFurH > vFurK * 1.15) discard;
+          if (uFurH > 0.35 + 0.65 * hh || uFurH > vFurK * 1.15) discard;
+          // soft strand edge through alpha-to-coverage (MSAA) instead of a hard cut-out, so the
+          // silhouette reads as soft fur rather than grainy dots; tips get thinner and fainter
+          // only where the surface turns away from the camera (the silhouette); facing the camera
+          // the strands stay crisp, which keeps the coat deep black without moire
+          float facing = abs(dot(normalize(vNormal), normalize(vViewPosition)));
+          float soft = smoothstep(rad, rad * 0.5, length(f)) * (1.0 - 0.5 * uFurH);
+          float hard = step(length(f), rad);
+          float cov = mix(soft, hard, smoothstep(0.15, 0.45, facing));
+          if (cov < 0.02) discard;
+          diffuseColor.a = cov;
         }
         diffuseColor.rgb *= mix(0.5, 1.15, uFurH) * (0.85 + 0.3 * hh);
       }`
     );
   };
+  m.alphaToCoverage = h > 0;
   m.customProgramCacheKey = () => 'fur';
   return m;
 }
@@ -56,6 +67,8 @@ function furSet(color, sheen, den, len) {
 }
 
 // ---------- Eyes ----------
+// The iris sits a little behind the clear cornea, so it shifts with the view (parallax),
+// which is what makes eyes look wet and deep rather than painted on.
 function eyeMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -63,49 +76,65 @@ function eyeMaterial() {
       uLight: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
     },
     vertexShader: `
-      varying vec3 vP; varying vec3 vN; varying vec3 vV;
+      varying vec3 vP; varying vec3 vN; varying vec3 vV; varying vec3 vVo;
       void main(){
         vP = normalize(position);
         vec4 mv = modelViewMatrix * vec4(position,1.0);
         vN = normalize(normalMatrix * normal);
         vV = normalize(-mv.xyz);
+        // view direction in object space (for the iris parallax)
+        vVo = normalize((inverse(modelViewMatrix) * vec4(0.0,0.0,0.0,1.0)).xyz - position);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `
       uniform float uPupil; uniform vec3 uLight;
-      varying vec3 vP; varying vec3 vN; varying vec3 vV;
-      float h(float n){ return fract(sin(n)*43758.5453); }
+      varying vec3 vP; varying vec3 vN; varying vec3 vV; varying vec3 vVo;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+      float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
       void main(){
-        vec2 xy = vP.xy;
         float R = 0.86;
+        // refraction: look "through" the cornea onto an iris plane slightly behind it
+        vec3 vo = normalize(vVo);
+        vec2 xy = vP.xy - vo.xy / max(vo.z, 0.35) * 0.09 * max(vP.z, 0.0);
         float d = length(xy) / R;
         vec3 col;
-        if (vP.z < 0.0 || d > 1.0) {
-          col = vec3(0.05,0.035,0.02);
+        if (vP.z < 0.0 || length(vP.xy) / R > 1.0) {
+          col = vec3(0.03,0.022,0.015);
         } else {
           float ang = atan(xy.y, xy.x);
-          float streak = 0.5 + 0.5*sin(ang*37.0 + sin(ang*11.0)*2.0) * 0.5 + 0.5*sin(ang*71.0)*0.3;
-          vec3 inner = vec3(0.56,0.64,0.16);   // greenish near the pupil
-          vec3 mid   = vec3(0.90,0.82,0.26);   // lemon yellow
-          vec3 outer = vec3(0.70,0.62,0.16);   // darker towards the edge
-          col = mix(inner, mid, smoothstep(0.12,0.5,d));
-          col = mix(col, outer, smoothstep(0.72,0.95,d));
-          col *= 0.85 + 0.25*streak;
-          col *= 1.0 - 0.8*smoothstep(0.93,1.0,d);   // dark limbal ring
-          col *= mix(0.5, 1.0, smoothstep(0.85, 0.25, xy.y / R)); // shadow from the upper lid
-          // pupil
-          vec2 pp = xy / vec2(uPupil*R*0.75, R*0.9);
+          // radial fibres (stroma) and a soft mottling
+          float fib = noise(vec2(ang * 22.0, d * 3.0)) * 0.6 + noise(vec2(ang * 60.0, d * 9.0)) * 0.4;
+          float mott = noise(xy * 9.0);
+          vec3 inner = vec3(0.50,0.60,0.14);   // green-olive around the pupil
+          vec3 mid   = vec3(0.92,0.78,0.22);   // warm gold
+          vec3 outer = vec3(0.78,0.58,0.12);   // amber towards the edge
+          col = mix(inner, mid, smoothstep(0.1, 0.55, d));
+          col = mix(col, outer, smoothstep(0.65, 0.95, d));
+          col *= 0.72 + 0.45 * fib + 0.12 * (mott - 0.5);
+          // collarette: a slightly darker ring around the pupil
+          float pr = uPupil * 0.75;
+          col *= 1.0 - 0.25 * exp(-pow((d - pr - 0.1) / 0.06, 2.0));
+          col *= 1.0 - 0.85 * smoothstep(0.9, 1.0, d);                 // dark limbal ring
+          col *= mix(0.45, 1.0, smoothstep(0.9, 0.2, vP.y / R));       // shadow cast by the upper lid
+          // pupil: a vertical ellipse, soft edged
+          vec2 pp = xy / vec2(uPupil * R * 0.75, R * 0.92);
           float pd = length(pp);
-          col = mix(vec3(0.005), col, smoothstep(0.92,1.06,pd));
+          col = mix(vec3(0.004,0.004,0.006), col, smoothstep(0.94, 1.05, pd));
         }
-        vec3 n = normalize(vN);
-        float dif = 0.55 + 0.45*max(dot(n, uLight),0.0);
+        vec3 n = normalize(vN), v = normalize(vV);
+        float dif = 0.6 + 0.4 * max(dot(n, uLight), 0.0);
         col *= dif;
+        // wet cornea: sharp key highlight, a soft broad sheen and a cool fresnel rim
         vec3 r = reflect(-uLight, n);
-        float spec = pow(max(dot(r, normalize(vV)),0.0), 260.0) * 2.0 + pow(max(dot(r, normalize(vV)),0.0), 30.0) * 0.12;
-        float fres = pow(1.0 - max(dot(n, normalize(vV)),0.0), 3.0);
-        col += vec3(1.0,0.97,0.9)*spec*1.6 + vec3(0.25,0.27,0.3)*fres*0.5;
-        gl_FragColor = vec4(col,1.0);
+        float rv = max(dot(r, v), 0.0);
+        float spec = pow(rv, 380.0) * 2.4 + pow(rv, 40.0) * 0.1;
+        // small secondary catchlight from the fill side (reads as a lively, cute eye)
+        vec3 l2 = normalize(vec3(-0.6, 0.25, 0.75));
+        float spec2 = pow(max(dot(reflect(-l2, n), v), 0.0), 600.0) * 0.9;
+        float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+        col += vec3(1.0,0.97,0.92) * (spec + spec2) + vec3(0.22,0.25,0.3) * fres * 0.45;
+        gl_FragColor = vec4(col, 1.0);
         #include <colorspace_fragment>
       }`,
   });
@@ -171,21 +200,37 @@ function taperTube(curve, segs, r, tip = 0.15, radial = 5) {
   return g;
 }
 
+// small deterministic PRNG, so the whiskers look the same on every load
+function mulberry(a) {
+  return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// whisker colour along its length: dark at the root (it grows out of black fur), pale at the tip;
+// a few whiskers stay dark grey all the way, as in the photos
+function whiskerColors(g, segs, radial, dark) {
+  const n = g.attributes.position.count, c = new Float32Array(n * 3);
+  const root = new THREE.Color(0x1a1714), tip = new THREE.Color(dark ? 0x6a645e : 0xf3f0ea), k = new THREE.Color();
+  for (let i = 0; i <= segs; i++) {
+    k.copy(root).lerp(tip, THREE.MathUtils.smoothstep(i / segs, 0.02, 0.35));
+    for (let j = 0; j <= radial; j++) k.toArray(c, (i * (radial + 1) + j) * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+}
+
 export class Cat {
   constructor() {
     this.root = new THREE.Group();
     this.parts = []; // meshes used for raycasting
     this.shellMeshes = [];
     this.fur = furSet(0x060505, 0x3a312c, 130, 0.034);
-    this.furMuzzle = furSet(0x151312, 0x6f6a64, 150, 0.022);
-    this.furChin = furSet(0x24170f, 0x8a6550, 150, 0.024);
+    this.furMuzzle = furSet(0x121010, 0x5c5752, 150, 0.022);
+    this.furChin = furSet(0x0e0a08, 0x4a3a30, 150, 0.022);
     this.matPad = new THREE.MeshStandardMaterial({ color: 0x5a4549, roughness: 0.55 });
     this.matNose = new THREE.MeshPhysicalMaterial({ color: 0x2b2627, roughness: 0.45, clearcoat: 0.5, clearcoatRoughness: 0.35 });
     this.matMouth = new THREE.MeshStandardMaterial({ color: 0x9a3a4a, roughness: 0.5, emissive: 0x3a0e16 });
     this.matTongue = new THREE.MeshPhysicalMaterial({ color: 0xd9788a, roughness: 0.4, clearcoat: 0.4 });
     this.matTooth = new THREE.MeshStandardMaterial({ color: 0xf4efe6, roughness: 0.3 });
-    this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xf2f0ec, roughness: 0.35 });
-    this.matWhiskerDark = new THREE.MeshStandardMaterial({ color: 0x55504c, roughness: 0.4 });
+    this.matWhisker = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.35 });
     this.eyeMats = [];
     this.matLid = new THREE.MeshPhysicalMaterial({ color: 0x080606, roughness: 0.75, sheen: 1, sheenColor: new THREE.Color(0x3a312c), sheenRoughness: 0.5 });
     this.matLidRim = new THREE.MeshStandardMaterial({ color: 0x030202, roughness: 0.45 });
@@ -251,9 +296,22 @@ export class Cat {
     // frame (see updateBody), so it always hugs the neck whatever the pose
     this.collar = new THREE.Group();
     this.collar.matrixAutoUpdate = false;
-    const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.55 });
+    const collarMat = new THREE.MeshStandardMaterial({ color: 0xe8679f, roughness: 0.62 });
     this.collarMat = collarMat;
-    this.collarBand = new THREE.Mesh(new THREE.TorusGeometry(1, 0.11, 10, 56), collarMat);
+    // a flat soft band (rounded-rectangle cross-section) rather than a round tube; its radius is
+    // in units of the neck radius (the ring is scaled to the neck), its width is absolute
+    const prof = [];
+    const T = 0.075, W = 0.05;
+    for (let i = 0; i <= 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      // superellipse: nearly flat faces with softly rounded edges
+      const e = 0.35;
+      prof.push(new THREE.Vector2(1 + T / 2 + (T / 2) * Math.sign(ca) * Math.abs(ca) ** e, W * Math.sign(sa) * Math.abs(sa) ** e));
+    }
+    const bandGeo = new THREE.LatheGeometry(prof, 64);
+    bandGeo.rotateX(Math.PI / 2);
+    this.collarBand = new THREE.Mesh(bandGeo, collarMat);
     this.collarBand.castShadow = true;
     this.collar.add(this.collarBand);
     // small round tag on a ring at the bottom of the collar
@@ -318,19 +376,21 @@ export class Cat {
     // eyes: round, wide-set, outer corners slightly raised
     this.eyes = []; this.lids = [];
     for (const s of [1, -1]) {
-      const eg = G(); eg.position.set(0.26 * s, 0.085, 0.395); eg.rotation.set(0, 0.2 * s, 0.1 * s); H.add(eg);
+      // the eyeball is set slightly into the skull and its front is a little flatter (cornea),
+      // so the eyes read as sitting in their sockets rather than stuck on
+      const eg = G(); eg.position.set(0.26 * s, 0.085, 0.39); eg.rotation.set(0, 0.22 * s, 0.1 * s); eg.scale.set(1, 1, 0.9); H.add(eg);
       const look = G(); eg.add(look);
       const em = eyeMaterial(); this.eyeMats.push(em);
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.142, 32, 24), em);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.15, 40, 30), em);
       look.add(eye);
-      const lidGeoU = new THREE.SphereGeometry(0.155, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-      const lidGeoL = new THREE.SphereGeometry(0.152, 28, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+      const lidGeoU = new THREE.SphereGeometry(0.157, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+      const lidGeoL = new THREE.SphereGeometry(0.155, 32, 12, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
       const up = new THREE.Mesh(lidGeoU, this.matLid); up.castShadow = false;
       const lo = new THREE.Mesh(lidGeoL, this.matLid);
       eg.add(up); eg.add(lo);
       // eyelid margin: a dark rim along each lid edge that moves with the lid
-      for (const [lid, r] of [[up, 0.155], [lo, 0.152]]) {
-        const rim = new THREE.Mesh(new THREE.TorusGeometry(r - 0.002, 0.0075, 6, 32, Math.PI), this.matLidRim);
+      for (const [lid, r] of [[up, 0.157], [lo, 0.155]]) {
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(r - 0.001, 0.0055, 6, 40, Math.PI), this.matLidRim);
         rim.rotation.x = Math.PI / 2; rim.rotation.z = Math.PI; lid.add(rim);
       }
       this.eyes.push(look); this.lids.push({ up, lo });
@@ -348,24 +408,31 @@ export class Cat {
       this.ears.push({ g: eg, fold, s });
     }
 
-    // whiskers
+    // whiskers: four loose rows of 3 on each whisker pad (12 per side, as in real cats).
+    // They are thin, dark at the root and pale towards the tip, fan out sideways, curve
+    // gently forward and droop a little under their own weight. The upper rows are longest.
     this.whiskers = [];
+    const rnd = mulberry(7);
     for (const s of [1, -1]) {
-      const wg = G(); wg.position.set(0.12 * s, -0.2, 0.465); H.add(wg);
-      for (let i = 0; i < 8; i++) {
-        const yy = (i - 4) * 0.022;
-        const len = 0.6 + Math.random() * 0.25;
-        const dir = new THREE.Vector3(s, (i - 4) * 0.11 - 0.05, -0.25 + Math.random() * 0.15).normalize();
+      const wg = G(); wg.position.set(0.1 * s, -0.2, 0.47); H.add(wg);
+      for (let row = 0; row < 4; row++) for (let col = 0; col < 3; col++) {
+        // root on the pad: rows stacked vertically, columns going back along the pad
+        const root = new THREE.Vector3(s * (0.012 + col * 0.026), 0.03 - row * 0.024, -col * 0.03);
+        const len = (0.78 - row * 0.07 - col * 0.04) * (0.9 + rnd() * 0.18);
+        const spreadY = 0.32 - row * 0.2 + (rnd() - 0.5) * 0.08;   // fan: top rows up, bottom rows down
+        const dir = new THREE.Vector3(s, spreadY, -0.12 - col * 0.12 + (rnd() - 0.5) * 0.1).normalize();
         const pts = [];
-        for (let k = 0; k <= 6; k++) {
-          const t = k / 6;
-          pts.push(new THREE.Vector3(dir.x * len * t, yy + dir.y * len * t - 0.12 * t * t, dir.z * len * t + 0.02 * Math.sin(t * 3)));
+        for (let k = 0; k <= 7; k++) {
+          const t = k / 7;
+          pts.push(new THREE.Vector3(
+            root.x + dir.x * len * t,
+            root.y + dir.y * len * t - 0.09 * len * t * t,          // droop
+            root.z + dir.z * len * t + 0.07 * len * Math.sin(t * Math.PI) // forward bow
+          ));
         }
-        const curve = new THREE.CatmullRomCurve3(pts);
-        const tube = taperTube(curve, 14, 0.0055, 0.12);
-        // a couple of darker whiskers, as in the photos
-        const w = new THREE.Mesh(tube, i === 1 || i === 6 ? this.matWhiskerDark : this.matWhisker);
-        wg.add(w);
+        const tube = taperTube(new THREE.CatmullRomCurve3(pts), 16, 0.0042, 0.1, 4);
+        whiskerColors(tube, 16, 4, row * 3 + col === 4 || row * 3 + col === 9);
+        wg.add(new THREE.Mesh(tube, this.matWhisker));
       }
       this.whiskers.push(wg);
       // eyebrow whiskers
@@ -377,7 +444,8 @@ export class Cat {
           const t = k / 4;
           pts.push(new THREE.Vector3(s * (0.5 + i * 0.3) * t * len, (0.55 - i * 0.15) * t * len, 0.45 * t * len - 0.04 * t * t));
         }
-        bg.add(new THREE.Mesh(taperTube(new THREE.CatmullRomCurve3(pts), 8, 0.0042, 0.15), this.matWhisker));
+        const tb = taperTube(new THREE.CatmullRomCurve3(pts), 8, 0.0034, 0.12, 4); whiskerColors(tb, 8, 4, false);
+        bg.add(new THREE.Mesh(tb, this.matWhisker));
       }
     }
 
@@ -390,7 +458,11 @@ export class Cat {
       this.addPart(sh, ellipsoid(0.19, 0.36, 0.26), [-0.03 * s, -0.17, 0], 'body', this.fur, { dir: [0, -1, -0.3] });
       this.addPart(sh, capsuleDown(0.15, 0.4, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
       const el = G(); el.position.set(0, -0.5, 0); sh.add(el);
-      this.addPart(el, capsuleDown(0.128, 0.9, 0.088), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      this.addPart(el, capsuleDown(0.13, 0.9, 0.086), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      // forearm muscles bulge just below the elbow and taper into a slim wrist;
+      // the point of the elbow sticks out a little at the back
+      this.addPart(el, ellipsoid(0.13, 0.3, 0.135, 20), [0, -0.24, 0.01], 'paw', this.fur, { dir: [0, -1, 0], k: 0.75 });
+      this.addPart(el, ellipsoid(0.09, 0.1, 0.09, 14), [0, -0.02, -0.075], 'paw', this.fur, { dir: [0, -1, -0.5], k: 0.8 });
       const wr = G(); wr.position.set(0, -0.98, 0); el.add(wr);
       const paw = G(); wr.add(paw);
       this.addPart(paw, ellipsoid(0.13, 0.11, 0.17), [0, -0.005, 0.06], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
@@ -404,16 +476,20 @@ export class Cat {
     for (const [side, s] of [['L', 1], ['R', -1]]) {
       const hp = G(); hp.position.set(0.3 * s, -0.05, -0.1); this.pelvis.add(hp);
       // thigh: broad and muscular, blending into the body
-      this.addPart(hp, ellipsoid(0.25, 0.48, 0.38), [0.02 * s, -0.2, 0.02], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.2 });
+      this.addPart(hp, ellipsoid(0.26, 0.5, 0.4), [0.035 * s, -0.22, 0.04], 'body', this.fur, { dir: [0, -1, -0.4], k: 1.25 });
+      // lower thigh running down to the knee (stifle), so the leg doesn't look like a stick
+      this.addPart(hp, ellipsoid(0.17, 0.3, 0.2, 20), [0.02 * s, -0.48, 0.06], 'paw', this.fur, { dir: [0, -1, -0.3], k: 1.1 });
       this.addPart(hp, capsuleDown(0.19, 0.5, 0.12), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0] });
       const kn = G(); kn.position.set(0, -0.62, 0); hp.add(kn);
-      this.addPart(kn, capsuleDown(0.11, 0.58, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
+      this.addPart(kn, capsuleDown(0.12, 0.58, 0.072), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.7 });
       // calf muscle behind the shin
-      this.addPart(kn, ellipsoid(0.1, 0.24, 0.12), [0, -0.2, -0.05], 'paw', this.fur, { dir: [0, -1, 0], k: 0.8 });
+      this.addPart(kn, ellipsoid(0.115, 0.27, 0.135, 20), [0, -0.19, -0.06], 'paw', this.fur, { dir: [0, -1, 0], k: 0.9 });
       const hk = G(); hk.position.set(0, -0.68, 0); kn.add(hk);
-      this.addPart(hk, capsuleDown(0.08, 0.36, 0.075), [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
-      // heel (hock)
-      this.addPart(hk, ellipsoid(0.075, 0.08, 0.09), [0, 0.0, -0.03], 'paw', this.fur, { dir: [0, -1, 0], k: 0.6 });
+      // metatarsus: lean and bony, flattened side to side
+      const mg = capsuleDown(0.074, 0.36, 0.066); mg.scale(0.88, 1, 1);
+      this.addPart(hk, mg, [0, 0, 0], 'paw', this.fur, { dir: [0, -1, 0], k: 0.55 });
+      // heel (hock): the point of the heel sticks out backwards
+      this.addPart(hk, ellipsoid(0.06, 0.075, 0.08, 14), [0, -0.01, -0.04], 'paw', this.fur, { dir: [0, -1, 0], k: 0.5 });
       const ft = G(); ft.position.set(0, -0.46, 0); hk.add(ft);
       this.addPart(ft, ellipsoid(0.12, 0.1, 0.18), [0, -0.01, 0.07], 'paw', this.fur, { dir: [0, -0.3, 1], k: 0.6 });
       this.addPads(ft, 0.12);
@@ -503,39 +579,42 @@ export class Cat {
   // ---------- Mouth: palate, teeth, gums, tongue ----------
   buildMouth(H) {
     const G = () => new THREE.Group();
+    // inside of the mouth: only shown while the mouth is open, so no teeth or gums peek
+    // out between the lips of a closed mouth
+    const M = G(); H.add(M); this.mouthInner = [M];
     // oral cavity: dark throat and pink walls
     const cav = new THREE.Mesh(ellipsoid(0.075, 0.04, 0.13, 18), this.matMouth);
-    cav.position.set(0, -0.25, 0.33); H.add(cav);
+    cav.position.set(0, -0.25, 0.33); M.add(cav);
     const throat = new THREE.Mesh(ellipsoid(0.06, 0.045, 0.05, 12), this.matThroat);
-    throat.position.set(0, -0.27, 0.24); H.add(throat);
+    throat.position.set(0, -0.27, 0.24); M.add(throat);
     // cavity filler: grows as the jaw opens and hides the skull behind the mouth
     this.mouthFill = new THREE.Mesh(ellipsoid(1, 1, 1, 20), new THREE.MeshStandardMaterial({ color: 0xa8404f, roughness: 0.5, emissive: 0x2a080e, side: THREE.BackSide }));
-    this.mouthFill.visible = false; H.add(this.mouthFill);
+    this.mouthFill.visible = false; M.add(this.mouthFill);
     // palate with transverse ridges
     const pal = new THREE.Mesh(ellipsoid(0.072, 0.022, 0.13, 18), this.matPalate);
-    pal.position.set(0, -0.232, 0.37); H.add(pal);
+    pal.position.set(0, -0.232, 0.37); M.add(pal);
     for (let i = 0; i < 5; i++) {
       const r = new THREE.Mesh(new THREE.TorusGeometry(0.05 - i * 0.004, 0.0045, 5, 16, Math.PI), this.matGum);
-      r.rotation.x = Math.PI / 2; r.position.set(0, -0.247, 0.43 - i * 0.028); r.scale.set(0.9, 0.6, 1); H.add(r);
+      r.rotation.x = Math.PI / 2; r.position.set(0, -0.247, 0.43 - i * 0.028); r.scale.set(0.9, 0.6, 1); M.add(r);
     }
     // upper gum and teeth
     const gumU = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 8, 24, Math.PI), this.matGum);
-    gumU.rotation.x = Math.PI / 2; gumU.position.set(0, -0.232, 0.415); gumU.scale.set(1, 1.15, 1); H.add(gumU);
+    gumU.rotation.x = Math.PI / 2; gumU.position.set(0, -0.232, 0.415); gumU.scale.set(1, 1.15, 1); M.add(gumU);
     const fang = (len, r) => { const g = new THREE.ConeGeometry(r, len, 10); g.translate(0, -len / 2, 0); return g; };
     for (const s of [-1, 1]) {
       // canine, slightly curved back
       const c = new THREE.Mesh(fang(0.048, 0.015), this.matTooth);
-      c.position.set(0.046 * s, -0.24, 0.475); c.rotation.set(-0.15, 0, 0.06 * s); H.add(c);
+      c.position.set(0.046 * s, -0.24, 0.475); c.rotation.set(-0.15, 0, 0.06 * s); M.add(c);
       // premolars
       for (let i = 0; i < 2; i++) {
         const pm = new THREE.Mesh(fang(0.03, 0.011), this.matTooth);
-        pm.position.set(0.058 * s, -0.244, 0.43 - i * 0.04); H.add(pm);
+        pm.position.set(0.058 * s, -0.244, 0.43 - i * 0.04); M.add(pm);
       }
     }
     for (let i = 0; i < 6; i++) {
       const a = (i - 2.5) * 0.28;
       const t = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0045, 0.02, 6), this.matTooth);
-      t.position.set(Math.sin(a) * 0.034, -0.25, 0.445 + Math.cos(a) * 0.042); H.add(t);
+      t.position.set(Math.sin(a) * 0.034, -0.25, 0.445 + Math.cos(a) * 0.042); M.add(t);
     }
     // upper lip: black edge
     const lipU = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.009, 6, 28, Math.PI), this.matLip);
@@ -543,24 +622,25 @@ export class Cat {
 
     // lower jaw
     this.jaw = G(); this.jaw.position.set(0, -0.21, 0.285); H.add(this.jaw);
-    // chin with a reddish-brown tint (as in the photos)
-    this.addPart(this.jaw, ellipsoid(0.085, 0.048, 0.125), [0, -0.05, 0.13], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.8 });
+    // chin: small and tucked in under the whisker pads, with a faint warm tint (as in the photos)
+    this.addPart(this.jaw, ellipsoid(0.08, 0.05, 0.12), [0, -0.058, 0.105], 'head', this.furChin, { dir: [0, -1, -0.5], k: 0.7 });
+    const J = new THREE.Group(); this.jaw.add(J); this.mouthInner.push(J);
     const floor = new THREE.Mesh(ellipsoid(0.07, 0.018, 0.12, 16), this.matMouth);
-    floor.position.set(0, -0.03, 0.12); this.jaw.add(floor);
+    floor.position.set(0, -0.03, 0.12); J.add(floor);
     const gumL = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.011, 8, 24, Math.PI), this.matGum);
-    gumL.rotation.x = Math.PI / 2; gumL.position.set(0, -0.022, 0.16); gumL.scale.set(1, 1.2, 1); this.jaw.add(gumL);
+    gumL.rotation.x = Math.PI / 2; gumL.position.set(0, -0.022, 0.16); gumL.scale.set(1, 1.2, 1); J.add(gumL);
     const lipL = new THREE.Mesh(new THREE.TorusGeometry(0.068, 0.008, 6, 28, Math.PI), this.matLip);
     lipL.rotation.x = Math.PI / 2; lipL.position.set(0, -0.02, 0.16); lipL.scale.set(1, 1.2, 1); this.jaw.add(lipL);
     for (const s of [-1, 1]) {
       const c = new THREE.Mesh(fang(0.05, 0.013), this.matTooth);
-      c.rotation.set(Math.PI + 0.2, 0, 0); c.position.set(0.042 * s, -0.02, 0.205); this.jaw.add(c);
+      c.rotation.set(Math.PI + 0.2, 0, 0); c.position.set(0.042 * s, -0.02, 0.205); J.add(c);
       const pm = new THREE.Mesh(fang(0.025, 0.01), this.matTooth);
-      pm.rotation.x = Math.PI; pm.position.set(0.055 * s, -0.02, 0.15); this.jaw.add(pm);
+      pm.rotation.x = Math.PI; pm.position.set(0.055 * s, -0.02, 0.15); J.add(pm);
     }
     for (let i = 0; i < 6; i++) {
       const a = (i - 2.5) * 0.3;
       const t = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.004, 0.016, 6), this.matTooth);
-      t.position.set(Math.sin(a) * 0.03, -0.012, 0.165 + Math.cos(a) * 0.045); this.jaw.add(t);
+      t.position.set(Math.sin(a) * 0.03, -0.012, 0.165 + Math.cos(a) * 0.045); J.add(t);
     }
     // tongue: flat, rounded tip, central groove
     this.tongue = G(); this.tongue.position.set(0, 0.0, 0.04); this.jaw.add(this.tongue);
@@ -629,7 +709,7 @@ export class Cat {
     V.uc.set(0, 1, 0).applyQuaternion(ch.quaternion);
     (V.un ||= new THREE.Vector3()).set(0, 1, 0).applyMatrix4(mN).sub(V.c.set(0, 0, 0).applyMatrix4(mN)).normalize();
     // profile: s, half-width, half-height, vertical offset
-    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.3, 0.45, 0.52, -0.03], [0.48, 0.46, 0.59, -0.05], [0.64, 0.39, 0.42, -0.05], [0.82, 0.27, 0.29, 0], [1, 0.26, 0.28, 0]];
+    const PR = [[0, 0.46, 0.5, 0], [0.15, 0.53, 0.56, 0], [0.3, 0.45, 0.5, -0.01], [0.48, 0.46, 0.59, -0.05], [0.64, 0.39, 0.42, -0.05], [0.82, 0.27, 0.29, 0], [1, 0.26, 0.28, 0]];
     const prof = (s, k) => {
       for (let i = 1; i < PR.length; i++) if (s <= PR[i][0]) {
         const t = (s - PR[i - 1][0]) / (PR[i][0] - PR[i - 1][0]);
@@ -678,8 +758,8 @@ export class Cat {
     const crx = prof(cs, 1), cry = prof(cs, 2), coff = prof(cs, 3);
     const m = this.collar.matrix.makeBasis(V.x, V.u, V.t);
     m.setPosition(V.c.x + V.u.x * coff, V.c.y + V.u.y * coff, V.c.z + V.u.z * coff);
-    this.collarBand.scale.set(crx + 0.035, cry * 0.98 + 0.035, 0.42);
-    this.collarTag.position.set(0, -(cry + 0.05), 0.03);
+    this.collarBand.scale.set(crx + 0.04, cry * 0.98 + 0.04, 1);
+    this.collarTag.position.set(0, -(cry + 0.07), 0.035);
     this.collar.matrixWorldNeedsUpdate = true;
   }
 
@@ -739,6 +819,7 @@ export class Cat {
     this.updateBody();
     this.jaw.rotation.x = P.jaw * 1.0;
     { const j = P.jaw; this.mouthFill.visible = j > 0.03;
+      for (const g of this.mouthInner) g.visible = j > 0.02 || P.tongue > 0.02;
       this.mouthFill.scale.set(0.07, 0.012 + 0.085 * j, 0.11); this.mouthFill.position.set(0, -0.245 - 0.07 * j, 0.37); }
     this.tongue.position.z = 0.01 + P.tongue * 0.33;
     this.tongue.position.y = -0.012 + P.tongue * 0.025;
