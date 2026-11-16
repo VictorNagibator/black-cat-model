@@ -589,7 +589,7 @@ function update(dt) {
       T.headRoll += pt.dx * 0.35 + Math.sin(pt.t * 2) * 0.08; T.headPitch -= 0.14; T.neckPitch -= 0.1; T.neckYaw += pt.dx * 0.25;
     } else if (settled('stand')) {
       // stroked along the back: the back rises into the hand, the tail goes straight up
-      T.tailPitch = 1.35; T.tailBendX = -0.05; T.tailCurl = 0.6; T.chestBend -= 0.06; T.pelvisBend += 0.1; T.torsoY += 0.08; T.blM_L = T.blM_R = -0.15;
+      T.tailPitch = 1.3; T.tailBendX = 0.0; T.tailCurl = 1.0; T.tailWave = 0.04; T.chestBend -= 0.06; T.pelvisBend += 0.1; T.torsoY += 0.08; T.blM_L = T.blM_R = -0.15;
     } else { T.tailWave = 0.05; }
     if (pt.heart <= 0) { emote(Math.random() < 0.7 ? '❤' : t('e.purr'), 'heart'); pt.heart = R(0.5, 0.9); }
     brain.idle = 0;
